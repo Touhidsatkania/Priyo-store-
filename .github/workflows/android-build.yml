@@ -46,7 +46,7 @@ jobs:
         run: |
           set -e
 
-          ZIP_FILE="PRIYO_STORE_V75_FINAL_CLEAN.zip"
+          ZIP_FILE="PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip"
 
           echo "===== CHECKING PRIYO STORE ZIP ====="
 
