@@ -12,16 +12,12 @@ jobs:
 
     steps:
 
-      # ==========================================
       # 1. Checkout
-      # ==========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # ==========================================
       # 2. Java 17
-      # ==========================================
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -29,19 +25,15 @@ jobs:
           java-version: '17'
 
 
-      # ==========================================
-      # 3. Setup Gradle
-      # ==========================================
+      # 3. Gradle 8.7
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
 
-      # ==========================================
-      # 4. Prepare PRIYO STORE project
-      # ==========================================
-      - name: Prepare project
+      # 4. Extract V90 project
+      - name: Prepare PRIYO STORE project
         shell: bash
         run: |
           set -e
@@ -49,11 +41,12 @@ jobs:
           ZIP_FILE="PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip"
 
           echo "=========================================="
-          echo "       PRIYO STORE V90 APK BUILD"
+          echo "       PRIYO STORE V90 BUILD"
           echo "=========================================="
 
           if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: $ZIP_FILE not found."
+            echo "ERROR: ZIP file not found:"
+            echo "$ZIP_FILE"
             echo ""
             echo "Available ZIP files:"
             find . -maxdepth 3 -type f -name "*.zip" -print
@@ -63,24 +56,16 @@ jobs:
           rm -rf build_source
           mkdir -p build_source
 
-          echo "Extracting:"
-          echo "$ZIP_FILE"
-
           unzip -q "$ZIP_FILE" -d build_source
 
-          echo ""
-          echo "Extracted successfully."
+          echo "ZIP extracted successfully."
 
 
-      # ==========================================
       # 5. Find Android project
-      # ==========================================
       - name: Find Android Gradle project
         shell: bash
         run: |
           set -e
-
-          echo "Searching Android project..."
 
           SETTINGS_FILE=$(find build_source \
             -type f \
@@ -89,47 +74,53 @@ jobs:
 
           if [ -z "$SETTINGS_FILE" ]; then
             echo "ERROR: settings.gradle not found."
-            find build_source -maxdepth 8 -type f | head -300
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
 
-          echo "Android project:"
+          echo "Android project found:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
 
-      # ==========================================
-      # 6. Fix duplicate launcher_bg resource
-      # ==========================================
-      - name: Fix duplicate launcher_bg resource
+      # 6. Enable AndroidX
+      - name: Enable AndroidX
         shell: bash
         run: |
           set -e
 
-          echo "=========================================="
-          echo " Checking duplicate launcher_bg resources"
-          echo "=========================================="
+          cd "$PROJECT_DIR"
+
+          touch gradle.properties
+
+          if grep -q "^android.useAndroidX=" gradle.properties; then
+            sed -i 's/^android.useAndroidX=.*/android.useAndroidX=true/' gradle.properties
+          else
+            echo "android.useAndroidX=true" >> gradle.properties
+          fi
+
+          if grep -q "^android.enableJetifier=" gradle.properties; then
+            sed -i 's/^android.enableJetifier=.*/android.enableJetifier=true/' gradle.properties
+          else
+            echo "android.enableJetifier=true" >> gradle.properties
+          fi
+
+          echo "AndroidX enabled."
+
+
+      # 7. Fix duplicate launcher_bg
+      - name: Fix duplicate launcher_bg
+        shell: bash
+        run: |
+          set -e
 
           python3 <<'PY'
           import os
           import re
 
           root = os.environ["PROJECT_DIR"]
-
-          files = []
-
-          for dirpath, _, filenames in os.walk(root):
-              for filename in filenames:
-                  if filename.endswith(".xml"):
-                      full = os.path.join(dirpath, filename)
-
-                      if os.path.basename(os.path.dirname(full)) == "values":
-                          files.append(full)
-
-          files.sort()
 
           pattern = re.compile(
               r'<color\s+name\s*=\s*["\']launcher_bg["\']\s*>.*?</color\s*>',
@@ -138,22 +129,29 @@ jobs:
 
           found = []
 
-          for path in files:
-              try:
-                  with open(path, "r", encoding="utf-8") as f:
-                      text = f.read()
-              except Exception:
+          for dirpath, _, filenames in os.walk(root):
+              if os.path.basename(dirpath) != "values":
                   continue
 
-              matches = pattern.findall(text)
+              for filename in filenames:
+                  if not filename.endswith(".xml"):
+                      continue
 
-              for match in matches:
-                  found.append(path)
+                  path = os.path.join(dirpath, filename)
 
-          print("launcher_bg definitions found:", len(found))
+                  try:
+                      with open(path, "r", encoding="utf-8") as f:
+                          text = f.read()
+                  except Exception:
+                      continue
+
+                  if pattern.search(text):
+                      found.append(path)
+
+          print("launcher_bg files found:", len(found))
 
           if len(found) <= 1:
-              print("No duplicate launcher_bg resource found.")
+              print("No duplicate launcher_bg found.")
               raise SystemExit(0)
 
           keep = found[0]
@@ -162,7 +160,7 @@ jobs:
           print(keep)
 
           for path in found[1:]:
-              print("Removing duplicate from:")
+              print("Removing duplicate:")
               print(path)
 
               with open(path, "r", encoding="utf-8") as f:
@@ -173,13 +171,11 @@ jobs:
               with open(path, "w", encoding="utf-8") as f:
                   f.write(text)
 
-          print("Duplicate launcher_bg resources fixed.")
+          print("Duplicate launcher_bg fixed.")
           PY
 
 
-      # ==========================================
-      # 7. Find Gradle wrapper
-      # ==========================================
+      # 8. Prepare Gradle Wrapper
       - name: Prepare Gradle Wrapper
         shell: bash
         run: |
@@ -188,9 +184,6 @@ jobs:
           cd "$PROJECT_DIR"
 
           if [ ! -f "./gradlew" ]; then
-            echo "Gradle wrapper not found."
-            echo "Generating wrapper..."
-
             gradle wrapper --gradle-version 8.7
           fi
 
@@ -199,9 +192,7 @@ jobs:
           echo "Gradle wrapper ready."
 
 
-      # ==========================================
-      # 8. Clean previous build
-      # ==========================================
+      # 9. Clean
       - name: Clean previous build
         shell: bash
         run: |
@@ -212,9 +203,7 @@ jobs:
           ./gradlew clean --no-daemon
 
 
-      # ==========================================
-      # 9. Build Debug APK
-      # ==========================================
+      # 10. Build Debug APK
       - name: Build Debug APK
         shell: bash
         run: |
@@ -223,30 +212,26 @@ jobs:
           cd "$PROJECT_DIR"
 
           echo "=========================================="
-          echo "          BUILDING PRIYO STORE APK"
+          echo "       BUILDING PRIYO STORE APK"
           echo "=========================================="
 
           ./gradlew assembleDebug --no-daemon --stacktrace
 
           echo "=========================================="
-          echo "          APK BUILD SUCCESS"
+          echo "          BUILD SUCCESS"
           echo "=========================================="
 
 
-      # ==========================================
-      # 10. Find APK
-      # ==========================================
+      # 11. Find APK
       - name: Find APK
         shell: bash
         run: |
           set -e
 
-          echo "Searching APK..."
-
           APK=$(find "$PROJECT_DIR" \
             -type f \
             -name "*.apk" \
-            | grep -E '/build/outputs/apk/debug/' \
+            | grep "/build/outputs/apk/debug/" \
             | head -1)
 
           if [ -z "$APK" ]; then
@@ -261,9 +246,7 @@ jobs:
           cp "$APK" "$GITHUB_WORKSPACE/PRIYO-STORE-DEBUG.apk"
 
 
-      # ==========================================
-      # 11. Upload APK
-      # ==========================================
+      # 12. Upload APK
       - name: Upload PRIYO STORE APK
         uses: actions/upload-artifact@v4
         with:
@@ -272,16 +255,12 @@ jobs:
           if-no-files-found: error
 
 
-      # ==========================================
-      # 12. Build Summary
-      # ==========================================
+      # 13. Summary
       - name: Build Summary
         shell: bash
         run: |
           echo "=========================================="
-          echo " PRIYO STORE BUILD COMPLETED SUCCESSFULLY"
+          echo " PRIYO STORE APK BUILD COMPLETED"
           echo "=========================================="
-          echo ""
           echo "APK: PRIYO-STORE-DEBUG.apk"
-          echo ""
           echo "Artifact: PRIYO-STORE-APK"
