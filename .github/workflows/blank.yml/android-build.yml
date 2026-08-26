@@ -1,0 +1,83 @@
+name: PRIYO STORE APK Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare project
+        run: |
+          set -e
+
+          ZIP_FILE="PRIYO_STORE_V75_FINAL_CLEAN.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: $ZIP_FILE not found"
+            exit 1
+          fi
+
+          mkdir -p build_source
+          unzip -q "$ZIP_FILE" -d build_source
+
+          echo "Extracted project:"
+          find build_source -maxdepth 4 -type f | head -100
+
+      - name: Find Android project
+        run: |
+          set -e
+
+          GRADLEW=$(find build_source -type f -name gradlew | head -1)
+
+          if [ -z "$GRADLEW" ]; then
+            echo "ERROR: gradlew was not found."
+            echo "The uploaded ZIP does not appear to contain a complete Android Gradle project."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$GRADLEW")
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Build Debug APK
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+          chmod +x gradlew
+
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Find APK
+        run: |
+          set -e
+
+          APK=$(find "$PROJECT_DIR" -type f -name "*.apk" | head -1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+
+      - name: Upload PRIYO STORE APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PRIYO-STORE-APK
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
