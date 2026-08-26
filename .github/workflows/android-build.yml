@@ -12,16 +12,16 @@ jobs:
 
     steps:
 
-      # ==============================
+      # ==========================================
       # 1. Checkout
-      # ==============================
+      # ==========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # ==============================
+      # ==========================================
       # 2. Java 17
-      # ==============================
+      # ==========================================
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -29,18 +29,18 @@ jobs:
           java-version: '17'
 
 
-      # ==============================
+      # ==========================================
       # 3. Setup Gradle
-      # ==============================
+      # ==========================================
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
 
-      # ==============================
+      # ==========================================
       # 4. Prepare PRIYO STORE project
-      # ==============================
+      # ==========================================
       - name: Prepare project
         shell: bash
         run: |
@@ -48,10 +48,12 @@ jobs:
 
           ZIP_FILE="PRIYO_STORE_V75_FINAL_CLEAN.zip"
 
-          echo "===== CHECKING ZIP ====="
+          echo "===== CHECKING PRIYO STORE ZIP ====="
 
           if [ ! -f "$ZIP_FILE" ]; then
             echo "ERROR: $ZIP_FILE not found."
+            echo "Available ZIP files:"
+            find . -maxdepth 2 -type f -name "*.zip" -print
             exit 1
           fi
 
@@ -62,14 +64,15 @@ jobs:
 
           unzip -q "$ZIP_FILE" -d build_source
 
-          echo "===== ZIP CONTENT ====="
+          echo ""
+          echo "===== EXTRACTED FILES ====="
 
           find build_source -maxdepth 8 -type f | head -300
 
 
-      # ==============================
+      # ==========================================
       # 5. Find Android project
-      # ==============================
+      # ==========================================
       - name: Find Android Gradle project
         shell: bash
         run: |
@@ -87,7 +90,7 @@ jobs:
             | head -1)
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: settings.gradle or settings.gradle.kts was not found."
+            echo "ERROR: Android settings file was not found."
             exit 1
           fi
 
@@ -99,9 +102,9 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
 
-      # ==============================
-      # 6. AndroidX configuration
-      # ==============================
+      # ==========================================
+      # 6. Configure AndroidX
+      # ==========================================
       - name: Configure AndroidX
         shell: bash
         run: |
@@ -125,17 +128,17 @@ jobs:
           cat gradle.properties
 
 
-      # ==============================
-      # 7. Fix Kotlin duplicate classes
-      # ==============================
-      - name: Configure Kotlin dependency alignment
+      # ==========================================
+      # 7. FIX KOTLIN DUPLICATE CLASSES
+      # ==========================================
+      - name: Configure Kotlin dependencies
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          echo "===== CREATING KOTLIN DEPENDENCY FIX ====="
+          echo "===== CREATING KOTLIN FIX ====="
 
           cat > kotlin-fix.gradle <<'EOF'
 
@@ -143,23 +146,36 @@ jobs:
 
               configurations.configureEach {
 
+                  // Kotlin 1.8+ already contains the JDK7/JDK8
+                  // implementations inside kotlin-stdlib.
+                  // Remove old separate JDK artifacts to prevent
+                  // duplicate classes.
+
+                  exclude(
+                      group: "org.jetbrains.kotlin",
+                      module: "kotlin-stdlib-jdk7"
+                  )
+
+                  exclude(
+                      group: "org.jetbrains.kotlin",
+                      module: "kotlin-stdlib-jdk8"
+                  )
+
                   resolutionStrategy {
 
                       force(
-                          "org.jetbrains.kotlin:kotlin-stdlib:1.8.22",
-                          "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22",
-                          "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22"
+                          "org.jetbrains.kotlin:kotlin-stdlib:1.8.22"
                       )
 
                       eachDependency { details ->
 
                           if (details.requested.group == "org.jetbrains.kotlin") {
 
-                              details.useVersion("1.8.22")
+                              if (details.requested.name == "kotlin-stdlib" ||
+                                  details.requested.name == "kotlin-stdlib-common") {
 
-                              details.because(
-                                  "Align all Kotlin dependencies to prevent duplicate classes"
-                              )
+                                  details.useVersion("1.8.22")
+                              }
                           }
                       }
                   }
@@ -168,17 +184,15 @@ jobs:
 
           EOF
 
-          echo "Kotlin dependency alignment file created."
-
           echo ""
           echo "===== KOTLIN FIX ====="
 
           cat kotlin-fix.gradle
 
 
-      # ==============================
+      # ==========================================
       # 8. Prepare Gradle Wrapper
-      # ==============================
+      # ==========================================
       - name: Prepare Gradle Wrapper
         shell: bash
         run: |
@@ -211,9 +225,9 @@ jobs:
           ls -la
 
 
-      # ==============================
-      # 9. Clean old build
-      # ==============================
+      # ==========================================
+      # 9. Clean build
+      # ==========================================
       - name: Clean previous build
         shell: bash
         run: |
@@ -229,9 +243,9 @@ jobs:
             --init-script kotlin-fix.gradle
 
 
-      # ==============================
+      # ==========================================
       # 10. Build Debug APK
-      # ==============================
+      # ==========================================
       - name: Build Debug APK
         shell: bash
         run: |
@@ -239,9 +253,10 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "================================"
-          echo "===== PRIYO STORE BUILD ====="
-          echo "================================"
+          echo ""
+          echo "=========================================="
+          echo "       PRIYO STORE APK BUILD"
+          echo "=========================================="
 
           ./gradlew assembleDebug \
             --stacktrace \
@@ -249,12 +264,14 @@ jobs:
             --init-script kotlin-fix.gradle
 
           echo ""
-          echo "===== BUILD COMPLETED ====="
+          echo "=========================================="
+          echo "       BUILD COMPLETED"
+          echo "=========================================="
 
 
-      # ==============================
+      # ==========================================
       # 11. Find APK
-      # ==============================
+      # ==========================================
       - name: Find APK
         shell: bash
         run: |
@@ -278,12 +295,14 @@ jobs:
           echo "===== APK FOUND ====="
           echo "$APK"
 
-          echo "APK_PATH=$PROJECT_DIR/$APK" >> "$GITHUB_ENV"
+          APK_ABSOLUTE=$(realpath "$APK")
+
+          echo "APK_PATH=$APK_ABSOLUTE" >> "$GITHUB_ENV"
 
 
-      # ==============================
+      # ==========================================
       # 12. Upload APK
-      # ==============================
+      # ==========================================
       - name: Upload PRIYO STORE APK
         uses: actions/upload-artifact@v4
         with:
@@ -292,17 +311,18 @@ jobs:
           if-no-files-found: error
 
 
-      # ==============================
-      # 13. Build summary
-      # ==============================
+      # ==========================================
+      # 13. Build Summary
+      # ==========================================
       - name: Build Summary
         if: success()
         shell: bash
         run: |
-          echo "================================"
-          echo "     PRIYO STORE APK READY"
-          echo "================================"
           echo ""
-          echo "APK artifact: PRIYO-STORE-APK"
+          echo "=========================================="
+          echo "        PRIYO STORE APK READY"
+          echo "=========================================="
           echo ""
-          echo "Build completed successfully."
+          echo "Artifact: PRIYO-STORE-APK"
+          echo ""
+          echo "BUILD SUCCESSFUL"
