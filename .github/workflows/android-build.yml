@@ -43,7 +43,7 @@ jobs:
           unzip -q "$ZIP_FILE" -d build_source
 
           echo "===== ZIP CONTENT ====="
-          find build_source -maxdepth 5 -type f | head -200
+          find build_source -maxdepth 6 -type f | head -300
 
       - name: Find Android Gradle project
         shell: bash
@@ -59,7 +59,6 @@ jobs:
 
           if [ -z "$SETTINGS_FILE" ]; then
             echo "ERROR: settings.gradle or settings.gradle.kts was not found."
-            echo "The ZIP does not appear to contain a complete Android Gradle project."
             exit 1
           fi
 
@@ -69,6 +68,26 @@ jobs:
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Fix AndroidX configuration
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "===== ANDROIDX CONFIGURATION ====="
+
+          touch gradle.properties
+
+          grep -qxF "android.useAndroidX=true" gradle.properties || \
+            echo "android.useAndroidX=true" >> gradle.properties
+
+          grep -qxF "android.enableJetifier=true" gradle.properties || \
+            echo "android.enableJetifier=true" >> gradle.properties
+
+          echo "===== gradle.properties ====="
+          cat gradle.properties
 
       - name: Prepare Gradle Wrapper
         shell: bash
