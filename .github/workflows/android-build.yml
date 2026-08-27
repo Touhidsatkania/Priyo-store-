@@ -7,9 +7,8 @@ on:
     paths:
       - 'PRIYO_STORE_V*.zip'
       - '.github/workflows/android-build.yml'
+
   workflow_dispatch:
-    branches:
-      - main
 
 permissions:
   contents: read
@@ -18,9 +17,10 @@ jobs:
   build:
     name: Build PRIYO STORE APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -34,55 +34,108 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK
+        shell: bash
         run: |
+          set -euo pipefail
+
           yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Select latest PRIYO STORE ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP=$(find . -maxdepth 1 -type f -name 'PRIYO_STORE_V*.zip' -printf '%f\n' | sort -V | tail -n 1)
+          ZIP="$(find . -maxdepth 1 -type f \
+            -name 'PRIYO_STORE_V*.zip' \
+            -printf '%f\n' \
+            | sort -V \
+            | tail -n 1)"
 
           if [ -z "$ZIP" ]; then
-            echo "::error::No PRIYO STORE project ZIP found."
+            echo "::error::No PRIYO STORE ZIP found."
             exit 1
           fi
 
+          echo "================================"
           echo "Selected ZIP: $ZIP"
+          echo "================================"
+
           echo "PROJECT_ZIP=$ZIP" >> "$GITHUB_ENV"
 
-      - name: Extract Android project
+      - name: Extract PRIYO STORE project
         shell: bash
         run: |
           set -euo pipefail
 
+          rm -rf extracted
           mkdir -p extracted
 
-          DIR="extracted/${PROJECT_ZIP%.zip}"
+          unzip -q "$PROJECT_ZIP" -d extracted
 
-          rm -rf "$DIR"
-          mkdir -p "$DIR"
+          echo "ZIP CONTENT:"
+          find extracted -maxdepth 4 -type f | sort | head -n 200
 
-          unzip -q "$PROJECT_ZIP" -d "$DIR"
+          echo "--------------------------------"
 
-          GRADLE=$(find "$DIR" -type f -name 'gradlew' | head -n 1)
+          GRADLEW="$(find extracted \
+            -type f \
+            -name 'gradlew' \
+            -print -quit)"
 
-          if [ -z "$GRADLE" ]; then
-            echo "::error::gradlew not found."
+          if [ -z "$GRADLEW" ]; then
+            echo "::error::gradlew was not found inside the selected ZIP."
+            echo ""
+            echo "Searching for Gradle project files..."
+
+            find extracted \
+              -type f \
+              \( -name 'settings.gradle' \
+              -o -name 'settings.gradle.kts' \
+              -o -name 'build.gradle' \
+              -o -name 'build.gradle.kts' \
+              \) \
+              -print
+
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$GRADLE")
+          PROJECT_DIR="$(dirname "$GRADLEW")"
+
+          echo "Gradle wrapper:"
+          echo "$GRADLEW"
+
+          echo "Android project:"
+          echo "$PROJECT_DIR"
+
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ] &&
+             [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+            echo "::error::Gradle settings file not found."
+            exit 1
+          fi
 
           if [ ! -d "$PROJECT_DIR/app" ]; then
             echo "::error::Android app module not found."
             exit 1
           fi
 
-          echo "Project found: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Prepare Gradle Wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          chmod +x ./gradlew
+
+          echo "Gradle Wrapper:"
+          ./gradlew --version
 
       - name: Configure AndroidX
         shell: bash
@@ -101,20 +154,30 @@ jobs:
             echo 'android.enableJetifier=true' >> gradle.properties
           fi
 
-      - name: Prepare Gradle
+      - name: Verify Android project
         shell: bash
         run: |
           set -euo pipefail
 
-          chmod +x "$PROJECT_DIR/gradlew"
+          cd "$PROJECT_DIR"
 
-          echo "Selected ZIP:"
-          echo "$PROJECT_ZIP"
+          echo "================================"
+          echo "ANDROID PROJECT"
+          echo "================================"
 
-          echo "Android project:"
-          echo "$PROJECT_DIR"
+          echo "Project: $PROJECT_DIR"
 
-          "$PROJECT_DIR/gradlew" --version
+          echo ""
+          echo "Settings:"
+          ls -la settings.gradle* 2>/dev/null || true
+
+          echo ""
+          echo "App module:"
+          ls -la app 2>/dev/null || true
+
+          echo ""
+          echo "Gradle:"
+          ./gradlew --version
 
       - name: Build PRIYO STORE APK
         shell: bash
@@ -132,18 +195,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK=$(find "$PROJECT_DIR/app/build/outputs/apk" \
+          APK="$(find "$PROJECT_DIR/app/build/outputs/apk" \
             -type f \
             -name '*.apk' \
-            | head -n 1)
+            -print -quit)"
 
           if [ -z "$APK" ]; then
             echo "::error::APK was not created."
             exit 1
           fi
 
-          echo "APK successfully created:"
-          echo "$APK"
+          echo "================================"
+          echo "APK CREATED SUCCESSFULLY"
+          echo "================================"
+
+          echo "APK: $APK"
 
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
