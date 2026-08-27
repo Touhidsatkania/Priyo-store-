@@ -1,6 +1,12 @@
 name: Build PRIYO STORE APK
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'PRIYO_STORE_V*.zip'
+      - '.github/workflows/android-build.yml'
   workflow_dispatch:
     branches:
       - main
@@ -32,105 +38,118 @@ jobs:
           yes | sdkmanager --licenses || true
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Find and extract Android project
+      - name: Select latest PRIYO STORE ZIP
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          mkdir -p extracted
-          FOUND=""
+          ZIP=$(find . -maxdepth 1 -type f -name 'PRIYO_STORE_V*.zip' -printf '%f\n' | sort -V | tail -n 1)
 
-          for ZIP in ./*.zip; do
-            [ -f "$ZIP" ] || continue
-
-            NAME="$(basename "$ZIP")"
-            DIR="extracted/${NAME%.zip}"
-
-            echo "Checking: $ZIP"
-            rm -rf "$DIR"
-            mkdir -p "$DIR"
-
-            unzip -q "$ZIP" -d "$DIR" || true
-
-            GRADLE="$(find "$DIR" -type f -name "gradlew" | head -n 1)"
-
-            if [ -n "$GRADLE" ]; then
-              PROJECT_DIR="$(dirname "$GRADLE")"
-
-              if [ -d "$PROJECT_DIR/app" ]; then
-                FOUND="$PROJECT_DIR"
-                echo "Android project found: $FOUND"
-                break
-              fi
-            fi
-          done
-
-          if [ -z "$FOUND" ]; then
-            echo "::error::No Android project containing gradlew and app was found."
+          if [ -z "$ZIP" ]; then
+            echo "::error::No PRIYO STORE project ZIP found."
             exit 1
           fi
 
-          echo "PROJECT_DIR=$FOUND" >> "$GITHUB_ENV"
+          echo "Selected ZIP: $ZIP"
+          echo "PROJECT_ZIP=$ZIP" >> "$GITHUB_ENV"
+
+      - name: Extract Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p extracted
+
+          DIR="extracted/${PROJECT_ZIP%.zip}"
+
+          rm -rf "$DIR"
+          mkdir -p "$DIR"
+
+          unzip -q "$PROJECT_ZIP" -d "$DIR"
+
+          GRADLE=$(find "$DIR" -type f -name 'gradlew' | head -n 1)
+
+          if [ -z "$GRADLE" ]; then
+            echo "::error::gradlew not found."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$GRADLE")
+
+          if [ ! -d "$PROJECT_DIR/app" ]; then
+            echo "::error::Android app module not found."
+            exit 1
+          fi
+
+          echo "Project found: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Configure AndroidX
+        shell: bash
         run: |
+          set -euo pipefail
+
           cd "$PROJECT_DIR"
 
           touch gradle.properties
 
-          if ! grep -q "^android.useAndroidX=" gradle.properties; then
-            echo "android.useAndroidX=true" >> gradle.properties
+          if ! grep -q '^android.useAndroidX=' gradle.properties; then
+            echo 'android.useAndroidX=true' >> gradle.properties
           fi
 
-          if ! grep -q "^android.enableJetifier=" gradle.properties; then
-            echo "android.enableJetifier=true" >> gradle.properties
+          if ! grep -q '^android.enableJetifier=' gradle.properties; then
+            echo 'android.enableJetifier=true' >> gradle.properties
           fi
 
-      - name: Fix Kotlin duplicate dependencies
+      - name: Prepare Gradle
+        shell: bash
         run: |
-          cd "$PROJECT_DIR"
+          set -euo pipefail
 
-          cat > kotlin-fix.init.gradle <<'EOF'
-          allprojects {
-              configurations.all {
-                  resolutionStrategy.eachDependency { details ->
-                      if (details.requested.group == "org.jetbrains.kotlin") {
-                          details.useVersion "1.8.22"
-                      }
-                  }
-              }
-          }
-          EOF
-
-      - name: Make Gradle executable
-        run: |
           chmod +x "$PROJECT_DIR/gradlew"
 
-      - name: Show Android project
-        run: |
-          echo "Project: $PROJECT_DIR"
-          echo "Gradle:"
+          echo "Selected ZIP:"
+          echo "$PROJECT_ZIP"
+
+          echo "Android project:"
+          echo "$PROJECT_DIR"
+
           "$PROJECT_DIR/gradlew" --version
 
-      - name: Build Debug APK
+      - name: Build PRIYO STORE APK
+        shell: bash
         run: |
+          set -euo pipefail
+
           cd "$PROJECT_DIR"
 
           ./gradlew clean assembleDebug \
-            --init-script kotlin-fix.init.gradle \
             --no-daemon \
             --stacktrace
 
-      - name: Find APK
+      - name: Verify APK
+        shell: bash
         run: |
-          find "$PROJECT_DIR/app/build/outputs/apk" \
-            -type f \
-            -name "*.apk" \
-            -print
+          set -euo pipefail
 
-      - name: Upload APK
+          APK=$(find "$PROJECT_DIR/app/build/outputs/apk" \
+            -type f \
+            -name '*.apk' \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "::error::APK was not created."
+            exit 1
+          fi
+
+          echo "APK successfully created:"
+          echo "$APK"
+
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+
+      - name: Upload PRIYO STORE APK
         uses: actions/upload-artifact@v4
         with:
           name: PRIYO-STORE-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          path: ${{ env.APK_PATH }}
           if-no-files-found: error
