@@ -33,17 +33,13 @@ jobs:
 
           SOURCE_ZIP="$(find . -maxdepth 2 -type f \
             \( -name 'PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip' \
-            -o -name 'PRIYO_STORE_V90*.zip' \
-            \) \
+            -o -name 'PRIYO_STORE_V90*.zip' \) \
             -print -quit)"
 
           if [ -z "$SOURCE_ZIP" ]; then
-            echo "ERROR: PRIYO STORE V90 source ZIP not found."
+            echo "ERROR: V90 source ZIP not found."
             exit 1
           fi
-
-          echo "Source ZIP found:"
-          echo "$SOURCE_ZIP"
 
           echo "SOURCE_ZIP=$SOURCE_ZIP" >> "$GITHUB_ENV"
 
@@ -57,9 +53,6 @@ jobs:
 
           unzip -q "$SOURCE_ZIP" -d build_source
 
-          echo "Extracted files:"
-          find build_source -maxdepth 3 -type f | head -100
-
       - name: Locate Android Project
         shell: bash
         run: |
@@ -70,37 +63,38 @@ jobs:
             -print -quit)"
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: Android settings.gradle not found."
+            echo "ERROR: settings.gradle not found."
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
 
-          echo "Android project:"
-          echo "$PROJECT_DIR"
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Set PRIYO STORE V91 Version
+          echo "Android project found:"
+          echo "$PROJECT_DIR"
+
+      - name: Inspect Android Project
         shell: bash
         run: |
           set -e
 
-          echo "Setting versionCode=91 and versionName=1.0.91"
-
-          find "$PROJECT_DIR" -type f \
-            \( -name 'build.gradle' -o -name 'build.gradle.kts' \) \
-            -print
+          echo "Project files:"
+          find "$PROJECT_DIR" -maxdepth 2 -type f | sort
 
       - name: Build Debug APK
         shell: bash
-        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
 
-          chmod +x gradlew
+          cd "$PROJECT_DIR"
 
-          ./gradlew clean assembleDebug --no-daemon
+          echo "Using Gradle 8.7"
+          gradle --version
+
+          echo "Starting Android build..."
+
+          gradle clean assembleDebug --no-daemon
 
       - name: Find APK
         shell: bash
