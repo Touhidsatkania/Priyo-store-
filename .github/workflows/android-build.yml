@@ -1,4 +1,4 @@
-name: Build PRIYO STORE V95
+name: Build PRIYO STORE V96
 
 on:
   workflow_dispatch:
@@ -11,29 +11,20 @@ permissions:
 
 jobs:
   build:
-    name: Build PRIYO STORE V95 APK
+    name: Build PRIYO STORE V96 APK
     runs-on: ubuntu-latest
 
     steps:
 
-      # =========================================================
-      # CHECKOUT
-      # =========================================================
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # =========================================================
-      # JAVA 17
-      # =========================================================
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # =========================================================
-      # ANDROID SDK
-      # =========================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
@@ -49,9 +40,6 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      # =========================================================
-      # GRADLE 8.9
-      # =========================================================
       - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -65,62 +53,457 @@ jobs:
         run: |
           set -e
 
-          echo "=================================================="
+          echo "=============================================="
           echo "SEARCHING FOR PRIYO STORE ANDROID PROJECT"
-          echo "=================================================="
+          echo "=============================================="
 
           PROJECT_DIR=""
 
-          # --------------------------------------------------
+          # -----------------------------------------------------
           # 1. Check repository root
-          # --------------------------------------------------
-          if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
-            if [ -f "app/build.gradle" ] || [ -f "app/build.gradle.kts" ]; then
-              PROJECT_DIR="$(pwd)"
-              echo "Android project found in repository root."
-            fi
+          # -----------------------------------------------------
+          if { [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; } && \
+             { [ -f "app/build.gradle" ] || [ -f "app/build.gradle.kts" ]; }; then
+
+            PROJECT_DIR="$PWD"
+
+            echo "Android project found in repository root:"
+            echo "$PROJECT_DIR"
           fi
 
-          # --------------------------------------------------
-          # 2. Search existing folders
-          # --------------------------------------------------
+          # -----------------------------------------------------
+          # 2. Search normal folders
+          # -----------------------------------------------------
           if [ -z "$PROJECT_DIR" ]; then
 
             while IFS= read -r settings_file; do
 
               [ -z "$settings_file" ] && continue
 
-              candidate_dir="$(cd "$(dirname "$settings_file")" && pwd)"
+              candidate_dir="$(dirname "$settings_file")"
 
               if [ -f "$candidate_dir/app/build.gradle" ] || \
                  [ -f "$candidate_dir/app/build.gradle.kts" ]; then
 
-                PROJECT_DIR="$candidate_dir"
+                PROJECT_DIR="$(cd "$candidate_dir" && pwd)"
+
                 echo "Android project found:"
                 echo "$PROJECT_DIR"
-                break
 
+                break
               fi
 
             done < <(
               find . \
                 -type f \
-                \
+                \( \
                   -name "settings.gradle" \
-                  -o -name "settings.gradle.kts" \
-                \
-                -not -path "*/.git/*" \
+                  -o \
+                  -name "settings.gradle.kts" \
+                \) \
+                -not -path "./.git/*" \
                 -not -path "*/build/*" \
                 -print
             )
-
           fi
 
-          # --------------------------------------------------
-          # 3. Search ALL ZIP files
-          # --------------------------------------------------
+          # -----------------------------------------------------
+          # 3. Search ZIP source packages
+          # -----------------------------------------------------
           if [ -z "$PROJECT_DIR" ]; then
 
             echo ""
-            echo "No Android project found directly."
-            echo "Searching ZIP source
+            echo "Android project not found directly."
+            echo "Searching ZIP source packages..."
+
+            SOURCE_ROOT="$GITHUB_WORKSPACE/android-source"
+
+            rm -rf "$SOURCE_ROOT"
+            mkdir -p "$SOURCE_ROOT"
+
+            ZIP_INDEX="$GITHUB_WORKSPACE/zip-index.txt"
+
+            find . \
+              -maxdepth 1 \
+              -type f \
+              -iname "*.zip" \
+              -printf "%s %p\n" \
+              | sort -nr > "$ZIP_INDEX"
+
+            if [ ! -s "$ZIP_INDEX" ]; then
+
+              echo ""
+              echo "ERROR: No ZIP source package found."
+
+              find . \
+                -maxdepth 3 \
+                -type f \
+                -print \
+                | head -300
+
+              exit 1
+            fi
+
+            while IFS= read -r zip_line; do
+
+              [ -z "$zip_line" ] && continue
+
+              ZIP_FILE="${zip_line#* }"
+
+              echo ""
+              echo "----------------------------------------------"
+              echo "INSPECTING:"
+              echo "$ZIP_FILE"
+              echo "----------------------------------------------"
+
+              CURRENT_DIR="$SOURCE_ROOT/current"
+
+              rm -rf "$CURRENT_DIR"
+              mkdir -p "$CURRENT_DIR"
+
+              if ! unzip -q "$ZIP_FILE" -d "$CURRENT_DIR"; then
+
+                echo "ZIP could not be extracted."
+                echo "Skipping..."
+
+                continue
+              fi
+
+              while IFS= read -r settings_file; do
+
+                [ -z "$settings_file" ] && continue
+
+                candidate_dir="$(dirname "$settings_file")"
+
+                if [ -f "$candidate_dir/app/build.gradle" ] || \
+                   [ -f "$candidate_dir/app/build.gradle.kts" ]; then
+
+                  PROJECT_DIR="$(cd "$candidate_dir" && pwd)"
+
+                  echo ""
+                  echo "=============================================="
+                  echo "ANDROID PROJECT FOUND INSIDE ZIP"
+                  echo "=============================================="
+
+                  echo "$PROJECT_DIR"
+
+                  break
+                fi
+
+              done < <(
+                find "$CURRENT_DIR" \
+                  -type f \
+                  \( \
+                    -name "settings.gradle" \
+                    -o \
+                    -name "settings.gradle.kts" \
+                  \) \
+                  -not -path "*/build/*" \
+                  -print
+              )
+
+              if [ -n "$PROJECT_DIR" ]; then
+                break
+              fi
+
+            done < "$ZIP_INDEX"
+          fi
+
+          # -----------------------------------------------------
+          # 4. Final verification
+          # -----------------------------------------------------
+          if [ -z "$PROJECT_DIR" ]; then
+
+            echo ""
+            echo "=============================================="
+            echo "ERROR: ANDROID PROJECT NOT FOUND"
+            echo "=============================================="
+
+            echo ""
+            echo "Repository files:"
+
+            find . \
+              -maxdepth 3 \
+              -type f \
+              -print \
+              | head -300
+
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo ""
+          echo "=============================================="
+          echo "ANDROID PROJECT READY"
+          echo "=============================================="
+
+          echo "$PROJECT_DIR"
+
+      # =========================================================
+      # PREPARE GRADLE PROJECT
+      # =========================================================
+      - name: Prepare Gradle Project
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "=============================================="
+          echo "PREPARING GRADLE PROJECT"
+          echo "=============================================="
+
+          if [ ! -f "settings.gradle" ] && \
+             [ ! -f "settings.gradle.kts" ]; then
+
+            cat > settings.gradle <<'EOF'
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(
+        org.gradle.api.initialization.resolve.RepositoriesMode.FAIL_ON_PROJECT_REPOS
+    )
+
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "PRIYO-STORE"
+
+include(":app")
+EOF
+
+          fi
+
+          if [ ! -f "build.gradle" ] && \
+             [ ! -f "build.gradle.kts" ]; then
+
+            cat > build.gradle <<'EOF'
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}
+EOF
+
+          fi
+
+          if [ ! -f "app/build.gradle" ] && \
+             [ ! -f "app/build.gradle.kts" ]; then
+
+            echo "ERROR: app Gradle file is missing."
+
+            exit 1
+          fi
+
+          echo ""
+          echo "PROJECT ROOT:"
+          pwd
+
+          echo ""
+          echo "PROJECT CONTENTS:"
+          ls -la
+
+      # =========================================================
+      # GRADLE WRAPPER
+      # =========================================================
+      - name: Prepare Gradle Wrapper
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          if [ -f "./gradlew" ]; then
+
+            echo "Existing Gradle wrapper found."
+
+            chmod +x ./gradlew
+
+          else
+
+            echo "Gradle wrapper not found."
+
+            echo "Generating Gradle 8.9 wrapper..."
+
+            gradle wrapper \
+              --gradle-version 8.9
+
+            chmod +x ./gradlew
+
+          fi
+
+          echo ""
+          echo "GRADLE VERSION:"
+
+          ./gradlew --version
+
+      # =========================================================
+      # VERIFY PROJECT
+      # =========================================================
+      - name: Verify Android Project
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          if [ -f "settings.gradle" ] || \
+             [ -f "settings.gradle.kts" ]; then
+
+            echo "Gradle settings: FOUND"
+
+          else
+
+            echo "ERROR: Gradle settings missing."
+
+            exit 1
+          fi
+
+          if [ -f "app/build.gradle" ] || \
+             [ -f "app/build.gradle.kts" ]; then
+
+            echo "Android app module: FOUND"
+
+          else
+
+            echo "ERROR: Android app module missing."
+
+            exit 1
+          fi
+
+          echo ""
+          echo "Android project verification completed."
+
+      # =========================================================
+      # CLEAN
+      # =========================================================
+      - name: Clean Android Build
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "CLEANING BUILD..."
+
+          ./gradlew clean \
+            --no-daemon \
+            --stacktrace
+
+      # =========================================================
+      # BUILD APK
+      # =========================================================
+      - name: Build PRIYO STORE V96 APK
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "=============================================="
+          echo "BUILDING PRIYO STORE V96 APK"
+          echo "=============================================="
+
+          ./gradlew :app:assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+          echo ""
+          echo "GRADLE BUILD FINISHED."
+
+      # =========================================================
+      # LOCATE APK
+      # =========================================================
+      - name: Locate Generated APK
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          APK_FILE=""
+
+          while IFS= read -r file; do
+
+            [ -z "$file" ] && continue
+
+            APK_FILE="$file"
+
+            break
+
+          done < <(
+            find . \
+              -type f \
+              -path "*/build/outputs/apk/*.apk" \
+              -print \
+              | sort
+          )
+
+          if [ -z "$APK_FILE" ]; then
+
+            echo ""
+            echo "ERROR: APK was not generated."
+
+            echo ""
+            echo "APK files found:"
+
+            find . \
+              -type f \
+              -name "*.apk" \
+              -print
+
+            exit 1
+          fi
+
+          echo ""
+          echo "APK FOUND:"
+          echo "$APK_FILE"
+
+          mkdir -p "$GITHUB_WORKSPACE/output"
+
+          cp "$APK_FILE" \
+            "$GITHUB_WORKSPACE/output/PRIYO_STORE_V96.apk"
+
+          test -s \
+            "$GITHUB_WORKSPACE/output/PRIYO_STORE_V96.apk"
+
+          echo ""
+          echo "FINAL APK:"
+          ls -lh \
+            "$GITHUB_WORKSPACE/output/PRIYO_STORE_V96.apk"
+
+      # =========================================================
+      # UPLOAD APK
+      # =========================================================
+      - name: Upload PRIYO STORE V96 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PRIYO-STORE-V96-APK
+          path: output/PRIYO_STORE_V96.apk
+          if-no-files-found: error
+
+      # =========================================================
+      # COMPLETE
+      # =========================================================
+      - name: Build Complete
+        shell: bash
+        run: |
+          set -e
+
+          echo "=============================================="
+          echo "PRIYO STORE V96 BUILD COMPLETE"
+          echo "=============================================="
+
+          ls -lh \
+            "$GITHUB_WORKSPACE/output/PRIYO_STORE_V96.apk"
+
+          echo ""
+          echo "V96 APK ARTIFACT IS READY."
