@@ -31,7 +31,7 @@ jobs:
         run: |
           set -e
 
-          SOURCE_ZIP="$(find . -maxdepth 3 -type f \
+          SOURCE_ZIP="$(find . -type f \
             \( \
               -name 'PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip' \
               -o -name 'PRIYO_STORE_V90*.zip' \
@@ -43,9 +43,7 @@ jobs:
             exit 1
           fi
 
-          echo "Source ZIP found:"
-          echo "$SOURCE_ZIP"
-
+          echo "Source ZIP: $SOURCE_ZIP"
           echo "SOURCE_ZIP=$SOURCE_ZIP" >> "$GITHUB_ENV"
 
       - name: Extract V90 Android Project
@@ -58,50 +56,54 @@ jobs:
 
           unzip -q "$SOURCE_ZIP" -d build_source
 
-          echo "Source extracted successfully."
-
       - name: Locate Android Project
         shell: bash
         run: |
           set -e
 
           SETTINGS_FILE="$(find build_source -type f \
-            \( \
-              -name 'settings.gradle' \
-              -o -name 'settings.gradle.kts' \
-            \) \
+            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
             -print -quit)"
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: Android settings.gradle not found."
-            echo "Extracted files:"
-            find build_source -maxdepth 4 -type f | sort
+            echo "ERROR: settings.gradle/settings.gradle.kts not found."
+            find build_source -maxdepth 5 -type f | sort
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
 
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
           echo "Android project:"
           echo "$PROJECT_DIR"
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Enable AndroidX and Jetifier
         shell: bash
         run: |
           set -e
 
-          mkdir -p "$PROJECT_DIR/gradle"
+          PROPERTIES_FILE="$PROJECT_DIR/gradle.properties"
 
-          cat > "$PROJECT_DIR/gradle.properties" <<'EOF'
-          android.useAndroidX=true
-          android.enableJetifier=true
-          org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
-          EOF
+          touch "$PROPERTIES_FILE"
 
-          echo "AndroidX and Jetifier enabled."
+          if ! grep -q '^android.useAndroidX=' "$PROPERTIES_FILE"; then
+            echo 'android.useAndroidX=true' >> "$PROPERTIES_FILE"
+          else
+            sed -i 's/^android.useAndroidX=.*/android.useAndroidX=true/' "$PROPERTIES_FILE"
+          fi
 
-      - name: Fix Duplicate Launcher Resources
+          if ! grep -q '^android.enableJetifier=' "$PROPERTIES_FILE"; then
+            echo 'android.enableJetifier=true' >> "$PROPERTIES_FILE"
+          else
+            sed -i 's/^android.enableJetifier=.*/android.enableJetifier=true/' "$PROPERTIES_FILE"
+          fi
+
+          if ! grep -q '^org.gradle.jvmargs=' "$PROPERTIES_FILE"; then
+            echo 'org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' >> "$PROPERTIES_FILE"
+          fi
+
+      - name: Remove Duplicate Color Resources
         shell: bash
         run: |
           set -e
@@ -113,29 +115,19 @@ jobs:
 
           project_dir = sys.argv[1]
 
-          patterns = [
-              re.compile(
-                  r'(<color\s+name=["\']launcher_bg["\'][^>]*>.*?</color>)',
-                  re.DOTALL
-              ),
-              re.compile(
-                  r'(<color\s+name=["\']launcher_fg["\'][^>]*>.*?</color>)',
-                  re.DOTALL
-              ),
-              re.compile(
-                  r'(<color\s+name=["\']launcher_text["\'][^>]*>.*?</color>)',
-                  re.DOTALL
-              ),
-          ]
+          color_pattern = re.compile(
+              r'<color\b[^>]*\bname\s*=\s*["\']([^"\']+)["\'][^>]*>.*?</color>',
+              re.DOTALL
+          )
 
-          fixed_files = 0
+          changed = 0
 
           for root, _, files in os.walk(project_dir):
+              if not os.path.basename(root).startswith("values"):
+                  continue
+
               for filename in files:
                   if not filename.endswith(".xml"):
-                      continue
-
-                  if not os.path.basename(root).startswith("values"):
                       continue
 
                   path = os.path.join(root, filename)
@@ -143,51 +135,82 @@ jobs:
                   try:
                       with open(path, "r", encoding="utf-8") as f:
                           text = f.read()
-                  except Exception:
+                  except UnicodeDecodeError:
                       continue
 
-                  original = text
+                  matches = list(color_pattern.finditer(text))
 
-                  for pattern in patterns:
-                      seen = False
+                  if not matches:
+                      continue
 
-                      def keep_first(match):
-                          nonlocal seen
-                          if not seen:
-                              seen = True
-                              return match.group(1)
-                          return ""
+                  seen = set()
+                  removed = 0
+                  output = []
+                  last = 0
 
-                      text = pattern.sub(keep_first, text)
+                  for match in matches:
+                      output.append(text[last:match.start()])
 
-                  if text != original:
+                      name = match.group(1)
+
+                      if name in seen:
+                          removed += 1
+                      else:
+                          seen.add(name)
+                          output.append(match.group(0))
+
+                      last = match.end()
+
+                  output.append(text[last:])
+                  new_text = "".join(output)
+
+                  if removed:
                       with open(path, "w", encoding="utf-8") as f:
-                          f.write(text)
+                          f.write(new_text)
 
-                      fixed_files += 1
-                      print("Fixed duplicate launcher resource:", path)
+                      changed += 1
+                      print(
+                          f"Removed {removed} duplicate color resource(s): {path}"
+                      )
 
-          print("Launcher resource cleanup completed.")
-          print("Files changed:", fixed_files)
+          print(
+              f"Duplicate color cleanup complete. Files changed: {changed}"
+          )
           PY
 
-      - name: Remove Build Caches
+      - name: Verify Launcher Colors
         shell: bash
         run: |
           set -e
 
-          rm -rf "$PROJECT_DIR/.gradle"
-          rm -rf "$PROJECT_DIR/app/build"
+          echo "Checking launcher color resources..."
 
-          echo "Old build caches removed."
+          find "$PROJECT_DIR" -type f \
+            -path '*/src/main/res/values*/launcher_colors.xml' \
+            -print
 
-      - name: Inspect Android Project
+          while IFS= read -r FILE; do
+            echo "---- $FILE"
+            grep -nE \
+              'name="(launcher_bg|launcher_fg|launcher_text)"' \
+              "$FILE" || true
+          done < <(
+            find "$PROJECT_DIR" -type f \
+              -path '*/src/main/res/values*/launcher_colors.xml' \
+              -print
+          )
+
+      - name: Clean Android Build
         shell: bash
         run: |
           set -e
 
-          echo "Android project structure:"
-          find "$PROJECT_DIR" -maxdepth 3 -type f | sort
+          cd "$PROJECT_DIR"
+
+          rm -rf .gradle
+          rm -rf app/build
+
+          gradle clean --no-daemon
 
       - name: Build PRIYO STORE V91 Debug APK
         shell: bash
@@ -199,9 +222,9 @@ jobs:
           echo "Gradle version:"
           gradle --version
 
-          echo "Starting PRIYO STORE V91 build..."
+          echo "Building PRIYO STORE V91..."
 
-          gradle clean assembleDebug --no-daemon --stacktrace
+          gradle assembleDebug --no-daemon --stacktrace
 
       - name: Find V91 APK
         shell: bash
@@ -213,16 +236,19 @@ jobs:
             -print -quit)"
 
           if [ -z "$APK_FILE" ]; then
-            echo "ERROR: PRIYO STORE V91 APK was not generated."
+            echo "ERROR: APK was not generated."
+            find "$PROJECT_DIR" -type f \
+              -path '*/build/outputs/**/*.apk' \
+              -print || true
             exit 1
           fi
-
-          echo "APK successfully generated:"
-          echo "$APK_FILE"
 
           mkdir -p release
 
           cp "$APK_FILE" "release/PRIYO-STORE-V91.apk"
+
+          echo "APK ready:"
+          ls -lh "release/PRIYO-STORE-V91.apk"
 
       - name: Upload PRIYO STORE V91 APK
         uses: actions/upload-artifact@v4
