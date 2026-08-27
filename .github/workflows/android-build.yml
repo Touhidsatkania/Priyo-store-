@@ -21,22 +21,21 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle 8.7
+      - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.9'
 
       - name: Find V91 Source ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          SOURCE_ZIP="$(find . -maxdepth 5 -type f \
-            -name 'PRIYO_STORE_V91_FINAL_2.zip' \
-            -print -quit)"
+          SOURCE_ZIP="$(find . -maxdepth 5 -type f -name 'PRIYO_STORE_V91_FINAL_2.zip' -print -quit)"
 
           if [ -z "$SOURCE_ZIP" ]; then
             echo "ERROR: PRIYO_STORE_V91_FINAL_2.zip not found."
+            echo "Available ZIP files:"
             find . -maxdepth 5 -type f -name '*.zip' -print || true
             exit 1
           fi
@@ -59,9 +58,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          SETTINGS_FILE="$(find build_source -type f \
-            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
-            -print -quit)"
+          SETTINGS_FILE="$(find build_source -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print -quit)"
 
           if [ -z "$SETTINGS_FILE" ]; then
             echo "ERROR: Android settings file not found."
@@ -71,7 +68,6 @@ jobs:
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
           echo "Android project: $PROJECT_DIR"
 
       - name: Verify V91 Version
@@ -87,45 +83,47 @@ jobs:
 
           if [ -f "$APP_GRADLE" ]; then
 
-            VERSION_CODE="$(grep -E \
-              '^[[:space:]]*versionCode[[:space:]]+[0-9]+' \
+            VERSION_CODE="$(
+              grep -E '^[[:space:]]*versionCode[[:space:]]+[0-9]+' \
               "$APP_GRADLE" |
               head -1 |
               grep -oE '[0-9]+' |
-              tail -1 || true)"
+              tail -1 || true
+            )"
 
-            VERSION_NAME="$(grep -E \
-              '^[[:space:]]*versionName[[:space:]]+' \
+            VERSION_NAME="$(
+              sed -nE \
+              's/.*versionName[[:space:]]+["'\'']([^"'\'']+)["'\''].*/\1/p' \
               "$APP_GRADLE" |
               head -1 |
-              sed -nE \
-              's/.*versionName[[:space:]]+["'"'"']([^"'"'"']+)["'"'"'].*/\1/p' |
-              head -1 |
               tr -d '\r\n' |
-              xargs || true)"
+              xargs || true
+            )
 
           elif [ -f "$APP_GRADLE_KTS" ]; then
 
-            VERSION_CODE="$(grep -E \
-              '^[[:space:]]*versionCode[[:space:]]*=' \
+            VERSION_CODE="$(
+              grep -E '^[[:space:]]*versionCode[[:space:]]*=' \
               "$APP_GRADLE_KTS" |
               head -1 |
               grep -oE '[0-9]+' |
-              tail -1 || true)"
+              tail -1 || true
+            )"
 
-            VERSION_NAME="$(grep -E \
-              '^[[:space:]]*versionName[[:space:]]*=' \
+            VERSION_NAME="$(
+              sed -nE \
+              's/.*versionName[[:space:]]*=[[:space:]]+["'\'']([^"'\'']+)["'\''].*/\1/p' \
               "$APP_GRADLE_KTS" |
               head -1 |
-              sed -nE \
-              's/.*versionName[[:space:]]*=[[:space:]]+["'"'"']([^"'"'"']+)["'"'"'].*/\1/p' |
-              head -1 |
               tr -d '\r\n' |
-              xargs || true)"
+              xargs || true
+            )
 
           else
+
             echo "ERROR: app/build.gradle or app/build.gradle.kts not found."
             exit 1
+
           fi
 
           echo "Detected versionCode: [$VERSION_CODE]"
@@ -136,7 +134,10 @@ jobs:
             exit 1
           fi
 
-          NORMALIZED_VERSION_NAME="$(printf '%s' "$VERSION_NAME" | tr -d '[:space:]\r\n')"
+          NORMALIZED_VERSION_NAME="$(
+            printf '%s' "$VERSION_NAME" |
+            tr -d '[:space:]\r\n'
+          )"
 
           if [ "$NORMALIZED_VERSION_NAME" != "1.0.91" ]; then
             echo "ERROR: versionName must be 1.0.91."
@@ -174,10 +175,11 @@ jobs:
             exit 1
           fi
 
-          COUNT="$(grep -o 'name="launcher_bg"' \
-            "$COLORS_FILE" |
+          COUNT="$(
+            grep -o 'name="launcher_bg"' "$COLORS_FILE" |
             wc -l |
-            tr -d ' ')"
+            tr -d ' '
+          )"
 
           echo "launcher_bg count: $COUNT"
 
@@ -235,26 +237,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK_FILE="$(find "$PROJECT_DIR" \
+          APK_FILE="$(
+            find "$PROJECT_DIR" \
             -type f \
             -path '*/build/outputs/apk/debug/*.apk' \
-            -print -quit)"
+            -print -quit
+          )"
 
           if [ -z "$APK_FILE" ]; then
             echo "ERROR: V91 APK was not generated."
-
-            find "$PROJECT_DIR" \
-              -type f \
-              -name '*.apk' \
-              -print || true
-
+            find "$PROJECT_DIR" -type f -name '*.apk' -print || true
             exit 1
           fi
 
           mkdir -p release
 
-          cp "$APK_FILE" \
-            "release/PRIYO-STORE-V91.apk"
+          cp "$APK_FILE" "release/PRIYO-STORE-V91.apk"
 
           ls -lh "release/PRIYO-STORE-V91.apk"
 
