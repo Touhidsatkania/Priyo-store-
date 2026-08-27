@@ -2,7 +2,6 @@ name: Build PRIYO STORE APK
 
 on:
   workflow_dispatch:
-  push:
     branches:
       - main
 
@@ -44,24 +43,23 @@ jobs:
           for ZIP in ./*.zip; do
             [ -f "$ZIP" ] || continue
 
-            NAME=$(basename "$ZIP")
+            NAME="$(basename "$ZIP")"
             DIR="extracted/${NAME%.zip}"
 
-            echo "Checking: $NAME"
+            echo "Checking: $ZIP"
             rm -rf "$DIR"
             mkdir -p "$DIR"
 
-            unzip -q "$ZIP" -d "$DIR" || continue
+            unzip -q "$ZIP" -d "$DIR" || true
 
-            GRADLEW=$(find "$DIR" -type f -name "gradlew" | head -n 1)
+            GRADLE="$(find "$DIR" -type f -name "gradlew" | head -n 1)"
 
-            if [ -n "$GRADLEW" ]; then
-              PROJECT_DIR=$(dirname "$GRADLEW")
+            if [ -n "$GRADLE" ]; then
+              PROJECT_DIR="$(dirname "$GRADLE")"
 
               if [ -d "$PROJECT_DIR/app" ]; then
                 FOUND="$PROJECT_DIR"
-                echo "Android project found:"
-                echo "$FOUND"
+                echo "Android project found: $FOUND"
                 break
               fi
             fi
@@ -80,11 +78,29 @@ jobs:
 
           touch gradle.properties
 
-          grep -q "^android.useAndroidX=" gradle.properties || \
+          if ! grep -q "^android.useAndroidX=" gradle.properties; then
             echo "android.useAndroidX=true" >> gradle.properties
+          fi
 
-          grep -q "^android.enableJetifier=" gradle.properties || \
+          if ! grep -q "^android.enableJetifier=" gradle.properties; then
             echo "android.enableJetifier=true" >> gradle.properties
+          fi
+
+      - name: Fix Kotlin duplicate dependencies
+        run: |
+          cd "$PROJECT_DIR"
+
+          cat > kotlin-fix.init.gradle <<'EOF'
+          allprojects {
+              configurations.all {
+                  resolutionStrategy.eachDependency { details ->
+                      if (details.requested.group == "org.jetbrains.kotlin") {
+                          details.useVersion "1.8.22"
+                      }
+                  }
+              }
+          }
+          EOF
 
       - name: Make Gradle executable
         run: |
@@ -99,16 +115,22 @@ jobs:
       - name: Build Debug APK
         run: |
           cd "$PROJECT_DIR"
-          ./gradlew clean assembleDebug --no-daemon --stacktrace
+
+          ./gradlew clean assembleDebug \
+            --init-script kotlin-fix.init.gradle \
+            --no-daemon \
+            --stacktrace
 
       - name: Find APK
         run: |
           find "$PROJECT_DIR/app/build/outputs/apk" \
-            -type f -name "*.apk" -print
+            -type f \
+            -name "*.apk" \
+            -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: PRIYO-STORE-APK
-          path: "**/app/build/outputs/apk/debug/*.apk"
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
