@@ -1,10 +1,10 @@
 name: Build PRIYO STORE APK
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,36 +27,45 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK 35
+      - name: Install Android SDK
         run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Setup Gradle 8.10
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.10'
-
-      - name: Extract PRIYO STORE project
-        run: |
-          rm -rf build-src
-          mkdir -p build-src
-          unzip -q PRIYO_STORE_V95_FULL_PROJECT_FIXED.zip -d build-src
+          yes | sdkmanager --licenses || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Verify Android project
         run: |
-          test -f build-src/settings.gradle
-          test -f build-src/build.gradle
-          test -f build-src/app/build.gradle
-          test -f build-src/app/src/main/AndroidManifest.xml
+          test -f settings.gradle || test -f settings.gradle.kts
+          test -f app/build.gradle || test -f app/build.gradle.kts
+
+      - name: Enable AndroidX
+        run: |
+          {
+            echo "android.useAndroidX=true"
+            echo "android.enableJetifier=true"
+          } >> gradle.properties
+
+      - name: Make Gradle executable
+        run: |
+          chmod +x gradlew
+
+      - name: Clean project
+        run: |
+          ./gradlew clean --no-daemon
 
       - name: Build Debug APK
-        working-directory: build-src
-        run: gradle --no-daemon assembleDebug --stacktrace
+        run: |
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Find APK
+        run: |
+          find app/build/outputs/apk -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: PRIYO-STORE-APK
-          path: build-src/app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
