@@ -6,6 +6,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build PRIYO STORE V91
@@ -20,6 +23,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
@@ -29,154 +33,217 @@ jobs:
       - name: Find V90 Source ZIP
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          SOURCE_ZIP="$(find . -type f \
+          ZIP_FILE="$(find . -maxdepth 3 -type f \
             \( -name 'PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip' \
-            -o -name 'PRIYO_STORE_V90*.zip' \
-            -o -name '*V90*.zip' \) \
+            -o -name 'PRIYO_STORE_V90*.zip' \) \
             -print -quit)"
 
-          if [ -z "$SOURCE_ZIP" ]; then
-            echo "ERROR: V90 source ZIP not found."
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: PRIYO STORE V90 source ZIP not found."
             exit 1
           fi
 
-          echo "Found source:"
-          echo "$SOURCE_ZIP"
+          echo "SOURCE_ZIP=$ZIP_FILE" >> "$GITHUB_ENV"
+          echo "Using source: $ZIP_FILE"
 
-          echo "SOURCE_ZIP=$SOURCE_ZIP" >> "$GITHUB_ENV"
-
-      - name: Extract V90 Android Project
+      - name: Extract Android Project
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          rm -rf build_source
-          mkdir -p build_source
+          rm -rf android-project
+          mkdir -p android-project
 
-          unzip -q "$SOURCE_ZIP" -d build_source
+          unzip -q "$SOURCE_ZIP" -d android-project
 
-          echo "Source extracted successfully."
+          echo "Extracted project:"
+          find android-project -maxdepth 4 -type f \
+            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
+            -print
 
       - name: Locate Android Project
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          SETTINGS_FILE="$(find build_source -type f \
-            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
-            -print -quit)"
+          mapfile -t SETTINGS_FILES < <(
+            find android-project -type f \
+              \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
+              -print | sort
+          )
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: Android settings.gradle not found."
-            find build_source -maxdepth 4 -type f | sort
+          if [ "${#SETTINGS_FILES[@]}" -eq 0 ]; then
+            echo "ERROR: No settings.gradle or settings.gradle.kts found."
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          if [ "${#SETTINGS_FILES[@]}" -gt 1 ]; then
+            echo "ERROR: Multiple Android project roots found:"
+            printf '%s\n' "${SETTINGS_FILES[@]}"
+            exit 1
+          fi
 
-          echo "Android project:"
-          echo "$PROJECT_DIR"
+          PROJECT_DIR="$(dirname "${SETTINGS_FILES[0]}")"
+
+          if [ ! -f "$PROJECT_DIR/build.gradle" ] &&
+             [ ! -f "$PROJECT_DIR/build.gradle.kts" ]; then
+            echo "ERROR: Root Gradle build file not found."
+            exit 1
+          fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Android project: $PROJECT_DIR"
 
-      - name: Enable AndroidX and Jetifier
+      - name: Enable AndroidX
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          touch "$PROJECT_DIR/gradle.properties"
+          cd "$PROJECT_DIR"
 
-          if ! grep -q '^android.useAndroidX=' "$PROJECT_DIR/gradle.properties"; then
-            echo "android.useAndroidX=true" >> "$PROJECT_DIR/gradle.properties"
-          else
-            sed -i 's/^android.useAndroidX=.*/android.useAndroidX=true/' \
-              "$PROJECT_DIR/gradle.properties"
+          touch gradle.properties
+
+          if ! grep -q '^android.useAndroidX=true' gradle.properties; then
+            echo 'android.useAndroidX=true' >> gradle.properties
           fi
 
-          if ! grep -q '^android.enableJetifier=' "$PROJECT_DIR/gradle.properties"; then
-            echo "android.enableJetifier=true" >> "$PROJECT_DIR/gradle.properties"
-          else
-            sed -i 's/^android.enableJetifier=.*/android.enableJetifier=true/' \
-              "$PROJECT_DIR/gradle.properties"
+          if ! grep -q '^android.enableJetifier=true' gradle.properties; then
+            echo 'android.enableJetifier=true' >> gradle.properties
           fi
 
-          echo "AndroidX configuration:"
-          cat "$PROJECT_DIR/gradle.properties"
-
-      - name: Set PRIYO STORE V91 Version
+      - name: Fix Duplicate Launcher Color Resource
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "Searching Android Gradle files..."
+          mapfile -t COLOR_FILES < <(
+            find "$PROJECT_DIR" -type f \
+              -path '*/src/*/res/values/ic_launcher_colors.xml' \
+              -print | sort
+          )
 
-          find "$PROJECT_DIR" -type f \
-            \( -name 'build.gradle' -o -name 'build.gradle.kts' \) \
-            -print
+          echo "Launcher color files found:"
+          printf '%s\n' "${COLOR_FILES[@]}"
 
-          while IFS= read -r FILE; do
-            echo "Checking: $FILE"
+          for FILE in "${COLOR_FILES[@]}"; do
+            [ -f "$FILE" ] || continue
 
-            sed -i -E \
-              's/versionCode[[:space:]]+[0-9]+/versionCode 91/g' \
-              "$FILE" || true
+            python3 - "$FILE" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
 
-            sed -i -E \
-              's/versionName[[:space:]]+["'\''][^"'\'']+["'\'']/versionName "1.0.91"/g' \
-              "$FILE" || true
+path = Path(sys.argv[1])
 
-          done < <(find "$PROJECT_DIR" -type f \
-            \( -name 'build.gradle' -o -name 'build.gradle.kts' \))
+try:
+    tree = ET.parse(path)
+    root = tree.getroot()
+except Exception as e:
+    print(f"Could not parse {path}: {e}")
+    sys.exit(0)
 
-          echo "V91 version configuration completed."
+seen = set()
+removed = 0
 
-      - name: Inspect Android Project
+for child in list(root):
+    if child.tag != "color":
+        continue
+
+    name = child.attrib.get("name")
+    if not name:
+        continue
+
+    if name in seen:
+        root.remove(child)
+        removed += 1
+    else:
+        seen.add(name)
+
+if removed:
+    ET.indent(tree, space="    ")
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+    print(f"Removed {removed} duplicate color resource(s) from {path}")
+else:
+    print(f"No duplicate color resources in {path}")
+PY
+          done
+
+      - name: Select Gradle
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "Project structure:"
-          find "$PROJECT_DIR" -maxdepth 3 -type f | sort
+          cd "$PROJECT_DIR"
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            echo "GRADLE_CMD=./gradlew" >> "$GITHUB_ENV"
+            echo "Using project Gradle wrapper."
+          else
+            echo "GRADLE_CMD=gradle" >> "$GITHUB_ENV"
+            echo "Using Gradle 8.7."
+          fi
+
+      - name: Inspect Project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          echo "Gradle:"
+          "$GRADLE_CMD" --version
+
+          echo "Android project files:"
+          find . -maxdepth 3 -type f | sort | head -300
+
+      - name: Clean Project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          "$GRADLE_CMD" clean \
+            --no-daemon \
+            --stacktrace
 
       - name: Build PRIYO STORE V91 Debug APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           cd "$PROJECT_DIR"
 
-          echo "Gradle version:"
-          gradle --version
-
           echo "Starting PRIYO STORE V91 build..."
 
-          gradle clean assembleDebug --no-daemon --stacktrace
+          "$GRADLE_CMD" assembleDebug \
+            --no-daemon \
+            --stacktrace
 
-      - name: Find V91 APK
+      - name: Find APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          APK_FILE="$(find "$PROJECT_DIR" -type f \
-            -path '*/build/outputs/apk/debug/*.apk' \
-            -print -quit)"
+          mapfile -t APKS < <(
+            find "$PROJECT_DIR" -type f \
+              -path '*/build/outputs/apk/debug/*.apk' \
+              -print | sort
+          )
 
-          if [ -z "$APK_FILE" ]; then
-            echo "ERROR: V91 APK was not generated."
+          if [ "${#APKS[@]}" -eq 0 ]; then
+            echo "ERROR: No Debug APK was generated."
             exit 1
           fi
 
-          echo "V91 APK found:"
-          echo "$APK_FILE"
+          echo "APK found:"
+          printf '%s\n' "${APKS[@]}"
 
           mkdir -p release
-
-          cp "$APK_FILE" \
-            "release/PRIYO-STORE-V91.apk"
-
-          ls -lh release/PRIYO-STORE-V91.apk
+          cp "${APKS[0]}" "release/PRIYO-STORE-V91.apk"
 
       - name: Upload PRIYO STORE V91 APK
         uses: actions/upload-artifact@v4
