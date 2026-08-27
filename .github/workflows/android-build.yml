@@ -1,26 +1,20 @@
-name: Build PRIYO STORE APK
+name: PRIYO APP Android Build
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-    paths:
-      - 'PRIYO_STORE_V*.zip'
-      - '.github/workflows/android-build.yml'
-
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build PRIYO STORE APK
+    name: Build PRIYO APP APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -30,217 +24,46 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: '8.7'
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK
-        shell: bash
         run: |
-          set -euo pipefail
-
-          yes | sdkmanager --licenses || true
-
-          sdkmanager \
-            "platform-tools" \
+          sdkmanager "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Select latest PRIYO STORE ZIP
-        shell: bash
+      - name: Setup Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Check Gradle
         run: |
-          set -euo pipefail
-
-          ZIP="$(
-            find . \
-              -maxdepth 1 \
-              -type f \
-              -name 'PRIYO_STORE_V*.zip' \
-              -printf '%T@ %p\n' \
-            | sort -nr \
-            | head -n 1 \
-            | cut -d' ' -f2-
-          )"
-
-          if [ -z "$ZIP" ]; then
-            echo "::error::No PRIYO STORE ZIP found in repository root."
-            exit 1
-          fi
-
-          echo "================================"
-          echo "Selected PRIYO STORE ZIP:"
-          echo "$ZIP"
-          echo "================================"
-
-          echo "PROJECT_ZIP=$ZIP" >> "$GITHUB_ENV"
-
-      - name: Extract PRIYO STORE project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf extracted
-          mkdir -p extracted
-
-          unzip -q "$PROJECT_ZIP" -d extracted
-
-          echo "ZIP CONTENT:"
-          find extracted -maxdepth 5 -type f | sort | head -n 300
-
-      - name: Detect Android project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          PROJECT_DIR=""
-
-          while IFS= read -r SETTINGS_FILE; do
-            CANDIDATE="$(dirname "$SETTINGS_FILE")"
-
-            if [ -d "$CANDIDATE/app" ]; then
-              PROJECT_DIR="$CANDIDATE"
-              break
-            fi
-          done < <(
-            find extracted \
-              -type f \
-              \( \
-                -name 'settings.gradle' \
-                -o \
-                -name 'settings.gradle.kts' \
-              \) \
-              -print
-          )
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "::error::Android project root was not found."
-            echo ""
-            echo "Available Gradle files:"
-            find extracted \
-              -type f \
-              \( \
-                -name 'settings.gradle' \
-                -o \
-                -name 'settings.gradle.kts' \
-                -o \
-                -name 'build.gradle' \
-                -o \
-                -name 'build.gradle.kts' \
-              \) \
-              -print
-            exit 1
-          fi
-
-          if [ ! -d "$PROJECT_DIR/app" ]; then
-            echo "::error::Android app module was not found."
-            exit 1
-          fi
-
-          echo "================================"
-          echo "ANDROID PROJECT FOUND"
-          echo "================================"
-          echo "PROJECT_DIR=$PROJECT_DIR"
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Configure AndroidX
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          touch gradle.properties
-
-          if ! grep -q '^android.useAndroidX=' gradle.properties; then
-            echo 'android.useAndroidX=true' >> gradle.properties
-          fi
-
-          if ! grep -q '^android.enableJetifier=' gradle.properties; then
-            echo 'android.enableJetifier=true' >> gradle.properties
-          fi
-
-      - name: Verify Android project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          echo "================================"
-          echo "ANDROID PROJECT VERIFICATION"
-          echo "================================"
-
-          echo ""
-          echo "Project directory:"
-          pwd
-
-          echo ""
-          echo "Project files:"
-          ls -la
-
-          echo ""
-          echo "App module:"
-          ls -la app
-
-          echo ""
-          echo "Gradle version:"
           gradle --version
 
-      - name: Build PRIYO STORE APK
-        shell: bash
+      - name: Verify Android project
         run: |
-          set -euo pipefail
+          test -f build.gradle
+          test -d app
+          test -f app/build.gradle
 
-          cd "$PROJECT_DIR"
-
-          echo "================================"
-          echo "BUILDING PRIYO STORE APK"
-          echo "================================"
-
-          gradle clean assembleDebug \
-            --no-daemon \
-            --stacktrace
+      - name: Build Debug APK
+        run: |
+          gradle clean assembleDebug --no-daemon --stacktrace
 
       - name: Verify APK
-        shell: bash
         run: |
-          set -euo pipefail
-
-          APK="$(
-            find "$PROJECT_DIR/app/build/outputs/apk" \
-              -type f \
-              -name '*.apk' \
-              -print \
-            | head -n 1
-          )"
-
+          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)"
           if [ -z "$APK" ]; then
-            echo "::error::APK was not created."
-            echo ""
-            echo "Searching build outputs:"
-            find "$PROJECT_DIR/app/build" \
-              -type f \
-              -name '*.apk' \
-              -print || true
+            echo "ERROR: APK was not produced."
             exit 1
           fi
+          echo "APK created: $APK"
 
-          echo "================================"
-          echo "APK CREATED SUCCESSFULLY"
-          echo "================================"
-
-          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
-
-          ls -lh "$APK"
-
-      - name: Upload PRIYO STORE APK
+      - name: Upload PRIYO APP APK
         uses: actions/upload-artifact@v4
         with:
-          name: PRIYO-STORE-APK
-          path: ${{ env.APK_PATH }}
+          name: PRIYO-APP-debug
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
