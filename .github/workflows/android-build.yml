@@ -12,22 +12,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ---------------------------------------------------------
+      # 1. Checkout
+      # ---------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
+
+      # ---------------------------------------------------------
+      # 2. Setup Java 17
+      # ---------------------------------------------------------
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+
+      # ---------------------------------------------------------
+      # 3. Setup Gradle 8.9
+      # ---------------------------------------------------------
       - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
+
       # ---------------------------------------------------------
-      # 1. Locate Android source
+      # 4. Locate V91 Android Source
       # ---------------------------------------------------------
       - name: Locate V91 Android Source
         shell: bash
@@ -39,335 +52,75 @@ jobs:
 
           PROJECT_DIR=""
 
-          # First: check whether Android project is already in repository
-          ROOT_APP_GRADLE="$(find . -type f \
-            \( -path './app/build.gradle' -o \
-               -path './app/build.gradle.kts' \) \
-            -print -quit)"
+          echo "=========================================="
+          echo "SEARCHING FOR ANDROID PROJECT"
+          echo "=========================================="
+
+          # First check whether Android project already exists
+          # directly inside repository.
+
+          ROOT_APP_GRADLE="$(
+            find . -type f \
+              -path './app/build.gradle' -o \
+                 -path './app/build.gradle.kts' \
+              -print -quit
+          )"
 
           if [ -n "$ROOT_APP_GRADLE" ]; then
             PROJECT_DIR="$(dirname "$(dirname "$ROOT_APP_GRADLE")")"
-            echo "Android project found directly in repository:"
+
+            echo "Android project found directly:"
             echo "$PROJECT_DIR"
           fi
 
-          # Second: search ZIP files if project is not in repository root
+
+          # -------------------------------------------------------
+          # If project is not directly available,
+          # find the correct V91 ZIP.
+          #
+          # IMPORTANT:
+          # Do NOT simply use "head -n 1".
+          #
+          # The repository contains a very small:
+          # PRIYO_STORE_V91_BUILD_PACKAGE.zip
+          #
+          # That package is not the complete Android source.
+          #
+          # Therefore we select the LARGEST V91 ZIP.
+          # -------------------------------------------------------
+
           if [ -z "$PROJECT_DIR" ]; then
 
-            SOURCE_ZIP="$(
+            echo
+            echo "Searching V91 ZIP files..."
+            echo
+
+            ZIP_LIST="$(
               find . -type f \
-                \( -iname '*V91*.zip' -o \
-                   -iname '*PRIYO*STORE*.zip' \) \
-                -print | head -n 1
+                -iname '*V91*.zip' \
+                -printf '%s %p\n' \
+                2>/dev/null |
+              sort -nr
             )"
 
-            if [ -z "$SOURCE_ZIP" ]; then
-              echo "ERROR: No Android source ZIP was found."
+            if [ -z "$ZIP_LIST" ]; then
+              echo "ERROR: No V91 Android source ZIP was found."
               echo
-              echo "ZIP files currently available:"
+              echo "Available ZIP files:"
               find . -type f -iname '*.zip' -print || true
               exit 1
             fi
 
-            echo "Using source archive:"
-            echo "$SOURCE_ZIP"
+            echo "V91 ZIP files found:"
+            echo "$ZIP_LIST"
+            echo
 
-            unzip -q "$SOURCE_ZIP" -d build_source
-
-            APP_GRADLE="$(
-              find build_source -type f \
-                \( -path '*/app/build.gradle' -o \
-                   -path '*/app/build.gradle.kts' \) \
-                -print -quit
+            # Select the largest V91 ZIP.
+            SOURCE_ZIP="$(
+              echo "$ZIP_LIST" |
+              head -n 1 |
+              cut -d' ' -f2-
             )"
 
-            if [ -z "$APP_GRADLE" ]; then
-              echo "ERROR: Android app Gradle file was not found."
-              echo
-              echo "Gradle files found:"
-              find build_source -type f \
-                \( -name 'build.gradle' -o \
-                   -name 'build.gradle.kts' \) \
-                -print || true
-              exit 1
-            fi
-
-            PROJECT_DIR="$(dirname "$(dirname "$APP_GRADLE")")"
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo
-          echo "=========================================="
-          echo "Android Project:"
-          echo "$PROJECT_DIR"
-          echo "=========================================="
-
-          if [ ! -f "$PROJECT_DIR/settings.gradle" ] &&
-             [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "WARNING: settings.gradle/settings.gradle.kts not found."
-          fi
-
-      # ---------------------------------------------------------
-      # 2. Locate app Gradle file dynamically
-      # ---------------------------------------------------------
-      - name: Locate App Gradle File
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APP_GRADLE="$(
-            find "$PROJECT_DIR" -type f \
-              \( -path '*/app/build.gradle' -o \
-                 -path '*/app/build.gradle.kts' \) \
-              -print -quit
-          )"
-
-          if [ -z "$APP_GRADLE" ]; then
-            echo "ERROR: app/build.gradle or app/build.gradle.kts not found."
-            exit 1
-          fi
-
-          echo "APP_GRADLE=$APP_GRADLE" >> "$GITHUB_ENV"
-
-          echo "App Gradle:"
-          echo "$APP_GRADLE"
-
-      # ---------------------------------------------------------
-      # 3. Correct V91 version verification
-      # ---------------------------------------------------------
-      - name: Verify V91 Version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Checking:"
-          echo "$APP_GRADLE"
-          echo
-
-          VERSION_CODE=""
-          VERSION_NAME=""
-
-          if [[ "$APP_GRADLE" == *.kts ]]; then
-
-            VERSION_CODE="$(
-              grep -Eo 'versionCode[[:space:]]*=[[:space:]]*[0-9]+' \
-                "$APP_GRADLE" |
-              grep -Eo '[0-9]+' |
-              head -n 1 || true
-            )"
-
-            VERSION_NAME="$(
-              grep -Eo 'versionName[[:space:]]*=[[:space:]]*"[^"]+"' \
-                "$APP_GRADLE" |
-              sed -E 's/.*"([^"]+)"/\1/' |
-              head -n 1 || true
-            )
-
-          else
-
-            VERSION_CODE="$(
-              grep -Eo 'versionCode[[:space:]]+[0-9]+' \
-                "$APP_GRADLE" |
-              grep -Eo '[0-9]+' |
-              head -n 1 || true
-            )"
-
-            VERSION_NAME="$(
-              grep -Eo 'versionName[[:space:]]+"[^"]+"' \
-                "$APP_GRADLE" |
-              sed -E 's/.*"([^"]+)"/\1/' |
-              head -n 1 || true
-            )
-
-          fi
-
-          echo "Detected versionCode: [$VERSION_CODE]"
-          echo "Detected versionName: [$VERSION_NAME]"
-
-          if [ "$VERSION_CODE" != "91" ]; then
-            echo "ERROR: versionCode must be 91."
-            exit 1
-          fi
-
-          if [ "$VERSION_NAME" != "1.0.91" ]; then
-            echo "ERROR: versionName must be 1.0.91."
-            exit 1
-          fi
-
-          echo
-          echo "V91 VERSION VERIFIED SUCCESSFULLY"
-          echo "versionCode = $VERSION_CODE"
-          echo "versionName = $VERSION_NAME"
-
-      # ---------------------------------------------------------
-      # 4. Remove duplicate launcher_bg resources
-      # ---------------------------------------------------------
-      - name: Fix Duplicate launcher_bg Resource
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 - <<'PY'
-          import os
-          import re
-
-          root = os.environ["PROJECT_DIR"]
-
-          pattern = re.compile(
-              r'<color\s+name=["\']launcher_bg["\']\s*>.*?</color\s*>',
-              re.DOTALL
-          )
-
-          found = False
-
-          for dirpath, _, filenames in os.walk(root):
-              if os.path.basename(dirpath) != "values":
-                  continue
-
-              for filename in filenames:
-                  if not filename.endswith(".xml"):
-                      continue
-
-                  path = os.path.join(dirpath, filename)
-
-                  try:
-                      with open(path, "r", encoding="utf-8") as f:
-                          text = f.read()
-                  except Exception:
-                      continue
-
-                  matches = list(pattern.finditer(text))
-
-                  if not matches:
-                      continue
-
-                  if not found:
-                      found = True
-                      print("Keeping launcher_bg:", path)
-                      continue
-
-                  text = pattern.sub("", text)
-
-                  with open(path, "w", encoding="utf-8") as f:
-                      f.write(text)
-
-                  print("Removed duplicate launcher_bg:", path)
-
-          PY
-
-      # ---------------------------------------------------------
-      # 5. Kotlin compatibility
-      # ---------------------------------------------------------
-      - name: Prepare Kotlin Compatibility Fix
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cat > "$GITHUB_WORKSPACE/kotlin-fix.init.gradle" <<'EOF'
-          allprojects {
-              configurations.configureEach {
-                  exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk7"
-                  exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk8"
-
-                  resolutionStrategy.force(
-                      "org.jetbrains.kotlin:kotlin-stdlib:1.8.22"
-                  )
-              }
-          }
-          EOF
-
-      # ---------------------------------------------------------
-      # 6. Clean
-      # ---------------------------------------------------------
-      - name: Clean Android Build
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          rm -rf .gradle
-          rm -rf app/build
-
-          gradle clean \
-            --no-daemon \
-            --stacktrace \
-            --init-script "$GITHUB_WORKSPACE/kotlin-fix.init.gradle"
-
-      # ---------------------------------------------------------
-      # 7. Build APK
-      # ---------------------------------------------------------
-      - name: Build PRIYO STORE V91 APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$PROJECT_DIR"
-
-          gradle assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            --init-script "$GITHUB_WORKSPACE/kotlin-fix.init.gradle"
-
-      # ---------------------------------------------------------
-      # 8. Verify APK
-      # ---------------------------------------------------------
-      - name: Verify Generated APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK_FILE="$(
-            find "$PROJECT_DIR" -type f \
-              -path '*/build/outputs/apk/debug/*.apk' \
-              -print -quit
-          )"
-
-          if [ -z "$APK_FILE" ]; then
-            echo "ERROR: APK was not generated."
-
-            find "$PROJECT_DIR" \
-              -type f \
-              -name "*.apk" \
-              -print || true
-
-            exit 1
-          fi
-
-          mkdir -p release
-
-          cp "$APK_FILE" \
-            release/PRIYO-STORE-V91.apk
-
-          echo
-          echo "=========================================="
-          echo "APK GENERATED SUCCESSFULLY"
-          echo "=========================================="
-
-          ls -lh release/PRIYO-STORE-V91.apk
-
-      # ---------------------------------------------------------
-      # 9. Upload APK
-      # ---------------------------------------------------------
-      - name: Upload PRIYO STORE V91 APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: PRIYO-STORE-V91-APK
-          path: release/PRIYO-STORE-V91.apk
-          if-no-files-found: error
-
-      # ---------------------------------------------------------
-      # 10. Final result
-      # ---------------------------------------------------------
-      - name: Build Complete
-        shell: bash
-        run: |
-          echo
-          echo "=========================================="
-          echo "PRIYO STORE V91 BUILD COMPLETED"
-          echo "=========================================="
-          echo "Version Code : 91"
-          echo "Version Name : 1.0.91"
-          echo "APK          : PRIYO-STORE-V91.apk"
-          echo "=========================================="
+            if [ -z "$SOURCE_ZIP" ]; then
+              echo "ERROR: SOURCE
