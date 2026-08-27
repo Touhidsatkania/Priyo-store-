@@ -37,8 +37,12 @@ jobs:
 
       - name: Verify Android project
         run: |
-          test -f settings.gradle || test -f settings.gradle.kts
-          test -f app/build.gradle || test -f app/build.gradle.kts
+          echo "Checking Android project..."
+          pwd
+          ls -la
+          test -f gradlew
+          test -d app
+          echo "Android project detected."
 
       - name: Enable AndroidX
         run: |
