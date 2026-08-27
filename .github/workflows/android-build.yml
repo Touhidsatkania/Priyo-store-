@@ -16,24 +16,24 @@ jobs:
 
     steps:
 
-      # =========================================================
+      # ==========================================
       # CHECKOUT
-      # =========================================================
+      # ==========================================
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # =========================================================
+      # ==========================================
       # JAVA 17
-      # =========================================================
+      # ==========================================
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # =========================================================
+      # ==========================================
       # ANDROID SDK
-      # =========================================================
+      # ==========================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
@@ -42,45 +42,41 @@ jobs:
         run: |
           set -e
 
-          yes | sdkmanager --licenses >/dev/null || true
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      # =========================================================
-      # GRADLE 8.9
-      # =========================================================
+      # ==========================================
+      # GRADLE
+      # ==========================================
       - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      # =========================================================
+      # ==========================================
       # FIND ANDROID PROJECT
-      # =========================================================
+      # ==========================================
       - name: Find Android Project
         shell: bash
         run: |
           set -e
 
-          echo "=============================================="
+          echo "=========================================="
           echo "SEARCHING FOR ANDROID PROJECT"
-          echo "=============================================="
+          echo "=========================================="
 
           PROJECT_DIR=""
 
-          # -----------------------------------------------------
-          # First: existing Android project
-          # -----------------------------------------------------
+          # Root Android project
           if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
-            PROJECT_DIR="$(pwd)"
+            PROJECT_DIR="$GITHUB_WORKSPACE"
           fi
 
-          # -----------------------------------------------------
-          # Second: search for settings.gradle
-          # -----------------------------------------------------
+          # Search Android project
           if [ -z "$PROJECT_DIR" ]; then
             while IFS= read -r file; do
               if [ -n "$file" ]; then
@@ -88,7 +84,7 @@ jobs:
                 break
               fi
             done < <(
-              find . \
+              find "$GITHUB_WORKSPACE" \
                 -type f \
                 \( \
                   -name "settings.gradle" \
@@ -100,178 +96,76 @@ jobs:
             )
           fi
 
-          # -----------------------------------------------------
-          # Third: find Android source ZIP
-          # -----------------------------------------------------
+          # Search app module directly
           if [ -z "$PROJECT_DIR" ]; then
-
-            ZIP_FILE=""
-
             while IFS= read -r file; do
               if [ -n "$file" ]; then
-                ZIP_FILE="$file"
+                PROJECT_DIR="$(cd "$(dirname "$file")/.." && pwd)"
                 break
               fi
             done < <(
-              find . \
+              find "$GITHUB_WORKSPACE" \
                 -type f \
                 \( \
-                  -iname "*V94*.zip" \
-                  -o -iname "*V91*.zip" \
-                  -o -iname "*V90*.zip" \
+                  -path "*/app/build.gradle" \
+                  -o -path "*/app/build.gradle.kts" \
                 \) \
+                -not -path "*/.gradle/*" \
+                -not -path "*/build/*" \
                 -print
             )
-
-            if [ -n "$ZIP_FILE" ]; then
-
-              echo "SOURCE ZIP FOUND:"
-              echo "$ZIP_FILE"
-
-              rm -rf android-source
-              mkdir -p android-source
-
-              unzip -q "$ZIP_FILE" -d android-source
-
-              while IFS= read -r file; do
-                if [ -n "$file" ]; then
-                  PROJECT_DIR="$(cd "$(dirname "$file")" && pwd)"
-                  break
-                fi
-              done < <(
-                find android-source \
-                  -type f \
-                  \( \
-                    -name "settings.gradle" \
-                    -o -name "settings.gradle.kts" \
-                  \) \
-                  -not -path "*/.gradle/*" \
-                  -not -path "*/build/*" \
-                  -print
-              )
-
-            fi
           fi
 
-          # -----------------------------------------------------
-          # Fourth: app directory fallback
-          # -----------------------------------------------------
-          if [ -z "$PROJECT_DIR" ] && [ -d "app" ]; then
-            if [ -f "app/build.gradle" ] || [ -f "app/build.gradle.kts" ]; then
-              PROJECT_DIR="$(pwd)"
-            fi
-          fi
-
-          # -----------------------------------------------------
-          # Stop if project was not found
-          # -----------------------------------------------------
           if [ -z "$PROJECT_DIR" ]; then
-
             echo ""
             echo "ERROR: Android project was not found."
             echo ""
-            echo "Repository files:"
-            find . -maxdepth 4 -type f -print | head -300
-
+            echo "Repository contents:"
+            find "$GITHUB_WORKSPACE" \
+              -maxdepth 4 \
+              -type f \
+              -print | head -300
             exit 1
           fi
 
           echo ""
-          echo "=============================================="
-          echo "ANDROID PROJECT FOUND"
-          echo "=============================================="
+          echo "ANDROID PROJECT FOUND:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      # =========================================================
-      # PREPARE ROOT GRADLE FILES
-      # =========================================================
-      - name: Prepare Gradle Project
+      # ==========================================
+      # ANDROIDX
+      # ==========================================
+      - name: Enable AndroidX
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          echo "=============================================="
-          echo "PREPARING GRADLE PROJECT"
-          echo "=============================================="
+          touch gradle.properties
 
-          # -----------------------------------------------------
-          # Create settings.gradle only if missing
-          # -----------------------------------------------------
-          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
+          grep -q "^android.useAndroidX=true" gradle.properties \
+            || echo "android.useAndroidX=true" >> gradle.properties
 
-            cat > settings.gradle <<'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
+          grep -q "^android.enableJetifier=true" gradle.properties \
+            || echo "android.enableJetifier=true" >> gradle.properties
 
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
+          grep -q "^org.gradle.jvmargs=" gradle.properties \
+            || echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
 
-          rootProject.name = "PRIYO-STORE"
-          include(":app")
-          EOF
+          echo "AndroidX configuration ready."
 
-          fi
-
-          # -----------------------------------------------------
-          # Create root build.gradle only if missing
-          # -----------------------------------------------------
-          if [ ! -f "build.gradle" ] && [ ! -f "build.gradle.kts" ]; then
-
-            cat > build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application' version '8.7.3' apply false
-          }
-          EOF
-
-          fi
-
-          # -----------------------------------------------------
-          # Verify app module
-          # -----------------------------------------------------
-          if [ -f "app/build.gradle" ]; then
-            echo "app/build.gradle FOUND."
-          elif [ -f "app/build.gradle.kts" ]; then
-            echo "app/build.gradle.kts FOUND."
-          else
-            echo "ERROR: Android app module was not found."
-            exit 1
-          fi
-
-          echo ""
-          echo "PROJECT ROOT:"
-          pwd
-
-          echo ""
-          echo "PROJECT CONTENTS:"
-          ls -la
-
-      # =========================================================
-      # PREPARE GRADLE WRAPPER
-      # =========================================================
+      # ==========================================
+      # GRADLE WRAPPER
+      # ==========================================
       - name: Prepare Gradle Wrapper
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
-
-          echo "=============================================="
-          echo "PREPARING GRADLE WRAPPER"
-          echo "=============================================="
 
           if [ -f "./gradlew" ]; then
 
@@ -294,9 +188,9 @@ jobs:
           echo "Gradle version:"
           ./gradlew --version
 
-      # =========================================================
+      # ==========================================
       # VERIFY PROJECT
-      # =========================================================
+      # ==========================================
       - name: Verify Android Project
         shell: bash
         run: |
@@ -304,16 +198,16 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "=============================================="
+          echo "=========================================="
           echo "VERIFYING ANDROID PROJECT"
-          echo "=============================================="
+          echo "=========================================="
 
           if [ -f "settings.gradle" ]; then
             echo "settings.gradle: FOUND"
           elif [ -f "settings.gradle.kts" ]; then
             echo "settings.gradle.kts: FOUND"
           else
-            echo "ERROR: Gradle settings file missing."
+            echo "ERROR: settings.gradle missing."
             exit 1
           fi
 
@@ -322,34 +216,35 @@ jobs:
           elif [ -f "app/build.gradle.kts" ]; then
             echo "app/build.gradle.kts: FOUND"
           else
-            echo "ERROR: app Gradle file missing."
+            echo "ERROR: Android app module missing."
             exit 1
           fi
 
           echo ""
-          echo "Android project verification completed."
+          echo "PROJECT ROOT:"
+          pwd
 
-      # =========================================================
+          echo ""
+          echo "PROJECT CONTENTS:"
+          ls -la
+
+      # ==========================================
       # CLEAN
-      # =========================================================
-      - name: Clean Android Build
+      # ==========================================
+      - name: Clean Build
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          echo "=============================================="
-          echo "CLEANING ANDROID BUILD"
-          echo "=============================================="
-
           ./gradlew clean \
             --no-daemon \
             --stacktrace
 
-      # =========================================================
-      # BUILD DEBUG APK
-      # =========================================================
+      # ==========================================
+      # BUILD APK
+      # ==========================================
       - name: Build PRIYO STORE V94 APK
         shell: bash
         run: |
@@ -357,32 +252,23 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "=============================================="
+          echo "=========================================="
           echo "BUILDING PRIYO STORE V94 APK"
-          echo "=============================================="
+          echo "=========================================="
 
           ./gradlew :app:assembleDebug \
             --no-daemon \
             --stacktrace
 
-          echo ""
-          echo "=============================================="
-          echo "GRADLE BUILD SUCCESSFUL"
-          echo "=============================================="
-
-      # =========================================================
+      # ==========================================
       # FIND APK
-      # =========================================================
-      - name: Locate Generated APK
+      # ==========================================
+      - name: Locate APK
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
-
-          echo "=============================================="
-          echo "SEARCHING FOR GENERATED APK"
-          echo "=============================================="
 
           APK_FILE=""
 
@@ -399,17 +285,11 @@ jobs:
           )
 
           if [ -z "$APK_FILE" ]; then
-
-            echo ""
             echo "ERROR: APK was not generated."
-            echo ""
-            echo "Available APK files:"
             find . -type f -name "*.apk" -print
-
             exit 1
           fi
 
-          echo ""
           echo "APK FOUND:"
           echo "$APK_FILE"
 
@@ -418,15 +298,17 @@ jobs:
           cp "$APK_FILE" \
             "$GITHUB_WORKSPACE/output/PRIYO_STORE_V94.apk"
 
-          test -s "$GITHUB_WORKSPACE/output/PRIYO_STORE_V94.apk"
+          test -s \
+            "$GITHUB_WORKSPACE/output/PRIYO_STORE_V94.apk"
 
           echo ""
           echo "FINAL APK:"
-          ls -lh "$GITHUB_WORKSPACE/output/PRIYO_STORE_V94.apk"
+          ls -lh \
+            "$GITHUB_WORKSPACE/output/PRIYO_STORE_V94.apk"
 
-      # =========================================================
+      # ==========================================
       # UPLOAD APK
-      # =========================================================
+      # ==========================================
       - name: Upload PRIYO STORE V94 APK
         uses: actions/upload-artifact@v4
         with:
@@ -434,17 +316,15 @@ jobs:
           path: output/PRIYO_STORE_V94.apk
           if-no-files-found: error
 
-      # =========================================================
+      # ==========================================
       # COMPLETE
-      # =========================================================
+      # ==========================================
       - name: Build Complete
         shell: bash
         run: |
-          set -e
-
-          echo "=============================================="
+          echo "=========================================="
           echo "PRIYO STORE V94 BUILD COMPLETE"
-          echo "=============================================="
+          echo "=========================================="
 
           ls -lh \
             "$GITHUB_WORKSPACE/output/PRIYO_STORE_V94.apk"
