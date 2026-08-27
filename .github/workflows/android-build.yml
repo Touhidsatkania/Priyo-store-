@@ -51,7 +51,6 @@ jobs:
 
       # =========================================================
       # GRADLE 8.9
-      # AGP 8.7.x requires Gradle 8.9
       # =========================================================
       - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -59,36 +58,152 @@ jobs:
           gradle-version: '8.9'
 
       # =========================================================
-      # VERIFY SOURCE
+      # FIND ANDROID PROJECT
       # =========================================================
-      - name: Verify PRIYO STORE Source
+      - name: Find Android Project
         shell: bash
         run: |
           set -e
 
           echo "=============================================="
-          echo "VERIFYING PRIYO STORE SOURCE"
+          echo "SEARCHING FOR ANDROID PROJECT"
           echo "=============================================="
 
-          test -d app
-          test -f app/build.gradle
+          PROJECT_DIR=""
 
-          echo "app directory: OK"
-          echo "app/build.gradle: OK"
+          # -----------------------------------------------------
+          # First: existing Android project
+          # -----------------------------------------------------
+          if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
+            PROJECT_DIR="$(pwd)"
+          fi
+
+          # -----------------------------------------------------
+          # Second: search for settings.gradle
+          # -----------------------------------------------------
+          if [ -z "$PROJECT_DIR" ]; then
+            while IFS= read -r file; do
+              if [ -n "$file" ]; then
+                PROJECT_DIR="$(cd "$(dirname "$file")" && pwd)"
+                break
+              fi
+            done < <(
+              find . \
+                -type f \
+                \( \
+                  -name "settings.gradle" \
+                  -o -name "settings.gradle.kts" \
+                \) \
+                -not -path "*/.gradle/*" \
+                -not -path "*/build/*" \
+                -print
+            )
+          fi
+
+          # -----------------------------------------------------
+          # Third: find Android source ZIP
+          # -----------------------------------------------------
+          if [ -z "$PROJECT_DIR" ]; then
+
+            ZIP_FILE=""
+
+            while IFS= read -r file; do
+              if [ -n "$file" ]; then
+                ZIP_FILE="$file"
+                break
+              fi
+            done < <(
+              find . \
+                -type f \
+                \( \
+                  -iname "*V94*.zip" \
+                  -o -iname "*V91*.zip" \
+                  -o -iname "*V90*.zip" \
+                \) \
+                -print
+            )
+
+            if [ -n "$ZIP_FILE" ]; then
+
+              echo "SOURCE ZIP FOUND:"
+              echo "$ZIP_FILE"
+
+              rm -rf android-source
+              mkdir -p android-source
+
+              unzip -q "$ZIP_FILE" -d android-source
+
+              while IFS= read -r file; do
+                if [ -n "$file" ]; then
+                  PROJECT_DIR="$(cd "$(dirname "$file")" && pwd)"
+                  break
+                fi
+              done < <(
+                find android-source \
+                  -type f \
+                  \( \
+                    -name "settings.gradle" \
+                    -o -name "settings.gradle.kts" \
+                  \) \
+                  -not -path "*/.gradle/*" \
+                  -not -path "*/build/*" \
+                  -print
+              )
+
+            fi
+          fi
+
+          # -----------------------------------------------------
+          # Fourth: app directory fallback
+          # -----------------------------------------------------
+          if [ -z "$PROJECT_DIR" ] && [ -d "app" ]; then
+            if [ -f "app/build.gradle" ] || [ -f "app/build.gradle.kts" ]; then
+              PROJECT_DIR="$(pwd)"
+            fi
+          fi
+
+          # -----------------------------------------------------
+          # Stop if project was not found
+          # -----------------------------------------------------
+          if [ -z "$PROJECT_DIR" ]; then
+
+            echo ""
+            echo "ERROR: Android project was not found."
+            echo ""
+            echo "Repository files:"
+            find . -maxdepth 4 -type f -print | head -300
+
+            exit 1
+          fi
+
+          echo ""
+          echo "=============================================="
+          echo "ANDROID PROJECT FOUND"
+          echo "=============================================="
+          echo "$PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       # =========================================================
-      # CREATE ROOT GRADLE PROJECT
+      # PREPARE ROOT GRADLE FILES
       # =========================================================
       - name: Prepare Gradle Project
         shell: bash
         run: |
           set -e
 
+          cd "$PROJECT_DIR"
+
           echo "=============================================="
           echo "PREPARING GRADLE PROJECT"
           echo "=============================================="
 
-          cat > settings.gradle <<'EOF'
+          # -----------------------------------------------------
+          # Create settings.gradle only if missing
+          # -----------------------------------------------------
+          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
+
+            cat > settings.gradle <<'EOF'
           pluginManagement {
               repositories {
                   google()
@@ -109,63 +224,126 @@ jobs:
           include(":app")
           EOF
 
-          cat > build.gradle <<'EOF'
+          fi
+
+          # -----------------------------------------------------
+          # Create root build.gradle only if missing
+          # -----------------------------------------------------
+          if [ ! -f "build.gradle" ] && [ ! -f "build.gradle.kts" ]; then
+
+            cat > build.gradle <<'EOF'
           plugins {
               id 'com.android.application' version '8.7.3' apply false
           }
           EOF
 
-          echo "settings.gradle created."
-          echo "build.gradle created."
+          fi
+
+          # -----------------------------------------------------
+          # Verify app module
+          # -----------------------------------------------------
+          if [ -f "app/build.gradle" ]; then
+            echo "app/build.gradle FOUND."
+          elif [ -f "app/build.gradle.kts" ]; then
+            echo "app/build.gradle.kts FOUND."
+          else
+            echo "ERROR: Android app module was not found."
+            exit 1
+          fi
+
+          echo ""
+          echo "PROJECT ROOT:"
+          pwd
+
+          echo ""
+          echo "PROJECT CONTENTS:"
+          ls -la
 
       # =========================================================
-      # VERIFY VERSION
-      # Source must already contain V94.
+      # PREPARE GRADLE WRAPPER
       # =========================================================
-      - name: Verify V94 Version
+      - name: Prepare Gradle Wrapper
         shell: bash
         run: |
           set -e
 
+          cd "$PROJECT_DIR"
+
           echo "=============================================="
-          echo "VERIFYING V94 VERSION"
+          echo "PREPARING GRADLE WRAPPER"
           echo "=============================================="
 
-          grep -Eq 'versionCode[[:space:]]+94' app/build.gradle
-          grep -Eq "versionName[[:space:]]+['\"]1\.0\.94['\"]" app/build.gradle
+          if [ -f "./gradlew" ]; then
 
-          echo "versionCode 94: OK"
-          echo "versionName 1.0.94: OK"
+            chmod +x ./gradlew
 
-      # =========================================================
-      # VERIFY GRADLE PROJECT
-      # =========================================================
-      - name: Verify Gradle Project
-        shell: bash
-        run: |
-          set -e
+            echo "Existing Gradle wrapper found."
 
-          test -f settings.gradle
-          test -f build.gradle
-          test -f app/build.gradle
+          else
 
-          echo "settings.gradle: OK"
-          echo "build.gradle: OK"
-          echo "app/build.gradle: OK"
+            echo "Gradle wrapper not found."
+            echo "Generating Gradle 8.9 wrapper..."
+
+            gradle wrapper --gradle-version 8.9
+
+            chmod +x ./gradlew
+
+          fi
 
           echo ""
           echo "Gradle version:"
-          gradle --version
+          ./gradlew --version
+
+      # =========================================================
+      # VERIFY PROJECT
+      # =========================================================
+      - name: Verify Android Project
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "=============================================="
+          echo "VERIFYING ANDROID PROJECT"
+          echo "=============================================="
+
+          if [ -f "settings.gradle" ]; then
+            echo "settings.gradle: FOUND"
+          elif [ -f "settings.gradle.kts" ]; then
+            echo "settings.gradle.kts: FOUND"
+          else
+            echo "ERROR: Gradle settings file missing."
+            exit 1
+          fi
+
+          if [ -f "app/build.gradle" ]; then
+            echo "app/build.gradle: FOUND"
+          elif [ -f "app/build.gradle.kts" ]; then
+            echo "app/build.gradle.kts: FOUND"
+          else
+            echo "ERROR: app Gradle file missing."
+            exit 1
+          fi
+
+          echo ""
+          echo "Android project verification completed."
 
       # =========================================================
       # CLEAN
       # =========================================================
-      - name: Clean Build
+      - name: Clean Android Build
         shell: bash
         run: |
           set -e
 
-          gradle clean \
+          cd "$PROJECT_DIR"
+
+          echo "=============================================="
+          echo "CLEANING ANDROID BUILD"
+          echo "=============================================="
+
+          ./gradlew clean \
             --no-daemon \
             --stacktrace
 
@@ -177,27 +355,33 @@ jobs:
         run: |
           set -e
 
+          cd "$PROJECT_DIR"
+
           echo "=============================================="
           echo "BUILDING PRIYO STORE V94 APK"
           echo "=============================================="
 
-          gradle :app:assembleDebug \
+          ./gradlew :app:assembleDebug \
             --no-daemon \
             --stacktrace
 
           echo ""
-          echo "BUILD SUCCESSFUL."
+          echo "=============================================="
+          echo "GRADLE BUILD SUCCESSFUL"
+          echo "=============================================="
 
       # =========================================================
-      # VERIFY APK EXISTS
+      # FIND APK
       # =========================================================
-      - name: Verify Generated APK
+      - name: Locate Generated APK
         shell: bash
         run: |
           set -e
 
+          cd "$PROJECT_DIR"
+
           echo "=============================================="
-          echo "VERIFYING GENERATED APK"
+          echo "SEARCHING FOR GENERATED APK"
           echo "=============================================="
 
           APK_FILE=""
@@ -208,30 +392,37 @@ jobs:
               break
             fi
           done < <(
-            find app/build/outputs/apk \
+            find . \
               -type f \
-              -name "*.apk" \
+              -path "*/build/outputs/apk/*.apk" \
               -print
           )
 
           if [ -z "$APK_FILE" ]; then
+
+            echo ""
             echo "ERROR: APK was not generated."
+            echo ""
+            echo "Available APK files:"
+            find . -type f -name "*.apk" -print
+
             exit 1
           fi
 
+          echo ""
           echo "APK FOUND:"
           echo "$APK_FILE"
 
-          mkdir -p output
+          mkdir -p "$GITHUB_WORKSPACE/output"
 
           cp "$APK_FILE" \
-            output/PRIYO_STORE_V94.apk
+            "$GITHUB_WORKSPACE/output/PRIYO_STORE_V94.apk"
 
-          test -s output/PRIYO_STORE_V94.apk
+          test -s "$GITHUB_WORKSPACE/output/PRIYO_STORE_V94.apk"
 
           echo ""
           echo "FINAL APK:"
-          ls -lh output/PRIYO_STORE_V94.apk
+          ls -lh "$GITHUB_WORKSPACE/output/PRIYO_STORE_V94.apk"
 
       # =========================================================
       # UPLOAD APK
@@ -255,7 +446,8 @@ jobs:
           echo "PRIYO STORE V94 BUILD COMPLETE"
           echo "=============================================="
 
-          ls -lh output/PRIYO_STORE_V94.apk
+          ls -lh \
+            "$GITHUB_WORKSPACE/output/PRIYO_STORE_V94.apk"
 
           echo ""
           echo "V94 APK ARTIFACT IS READY."
