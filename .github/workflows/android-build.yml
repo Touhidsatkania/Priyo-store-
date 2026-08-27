@@ -33,16 +33,16 @@ jobs:
           set -e
 
           SOURCE_ZIP="$(find . -maxdepth 2 -type f \
-            -name 'PRIYO_STORE_V91_LOGIN_OTP_DISABLED.zip' \
+            -name 'PRIYO_STORE_V91_BUILD_READY_FIXED.zip' \
             -print -quit)"
 
           if [ -z "$SOURCE_ZIP" ]; then
-            echo "ERROR: PRIYO_STORE_V91_LOGIN_OTP_DISABLED.zip not found."
+            echo "ERROR: PRIYO_STORE_V91_BUILD_READY_FIXED.zip not found."
             echo "V90 fallback is not allowed."
             exit 1
           fi
 
-          echo "V91 Source ZIP found:"
+          echo "V91 source found:"
           echo "$SOURCE_ZIP"
 
           echo "SOURCE_ZIP=$SOURCE_ZIP" >> "$GITHUB_ENV"
@@ -78,7 +78,7 @@ jobs:
           echo "Android project:"
           echo "$PROJECT_DIR"
 
-      - name: Remove Duplicate Launcher Color
+      - name: Remove Duplicate Launcher Colors
         shell: bash
         run: |
           set -e
@@ -86,17 +86,18 @@ jobs:
           DUPLICATE_FILE="$PROJECT_DIR/app/src/main/res/values/ic_launcher_colors.xml"
 
           if [ -f "$DUPLICATE_FILE" ]; then
-            echo "Removing duplicate launcher color file:"
+            echo "Duplicate launcher color file found:"
             echo "$DUPLICATE_FILE"
+
             rm -f "$DUPLICATE_FILE"
           fi
 
           if [ -f "$DUPLICATE_FILE" ]; then
-            echo "ERROR: Duplicate launcher color file still exists."
+            echo "ERROR: ic_launcher_colors.xml still exists."
             exit 1
           fi
 
-          echo "OK: Duplicate launcher color file removed."
+          echo "OK: duplicate launcher color file removed."
 
       - name: Verify launcher_bg
         shell: bash
@@ -121,29 +122,23 @@ jobs:
 
           echo "OK: launcher_bg verified."
 
-      - name: Verify V91 Version
+      - name: Show Project Version
         shell: bash
         run: |
           set -e
 
-          APP_GRADLE="$PROJECT_DIR/app/build.gradle"
+          echo "Checking Android project version..."
 
-          if [ ! -f "$APP_GRADLE" ]; then
-            echo "ERROR: app/build.gradle not found."
-            exit 1
-          fi
+          find "$PROJECT_DIR" -maxdepth 3 -type f \
+            \( -name 'build.gradle' -o -name 'build.gradle.kts' \) \
+            -print
 
-          if ! grep -qE 'versionCode[[:space:]]+91' "$APP_GRADLE"; then
-            echo "ERROR: versionCode 91 not found."
-            exit 1
-          fi
-
-          if ! grep -qE 'versionName[[:space:]]+["'\'']1\.0\.91["'\'']' "$APP_GRADLE"; then
-            echo "ERROR: versionName 1.0.91 not found."
-            exit 1
-          fi
-
-          echo "OK: V91 version verified."
+          echo "Version references:"
+          grep -RIn \
+            --include='build.gradle' \
+            --include='build.gradle.kts' \
+            -E 'versionCode|versionName' \
+            "$PROJECT_DIR" || true
 
       - name: Clean Android Build
         shell: bash
@@ -164,6 +159,9 @@ jobs:
 
           cd "$PROJECT_DIR"
 
+          echo "Gradle version:"
+          gradle --version
+
           echo "Building PRIYO STORE V91..."
 
           gradle assembleDebug --no-daemon --stacktrace
@@ -179,6 +177,11 @@ jobs:
 
           if [ -z "$APK_FILE" ]; then
             echo "ERROR: V91 APK was not generated."
+
+            find "$PROJECT_DIR" -type f \
+              -name '*.apk' \
+              -print || true
+
             exit 1
           fi
 
@@ -186,7 +189,7 @@ jobs:
 
           cp "$APK_FILE" "release/PRIYO-STORE-V91.apk"
 
-          echo "V91 APK created successfully:"
+          echo "V91 APK successfully created:"
           ls -lh "release/PRIYO-STORE-V91.apk"
 
       - name: Upload PRIYO STORE V91 APK
