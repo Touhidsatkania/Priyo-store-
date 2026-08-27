@@ -1,4 +1,4 @@
-name: PRIYO STORE V91 APK Build
+name: Build PRIYO STORE V91 APK
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
       - main
 
 jobs:
-  build-apk:
+  build:
     name: Build PRIYO STORE V91
     runs-on: ubuntu-latest
 
@@ -19,30 +19,35 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.7"
+          gradle-version: '8.7'
 
-      - name: Find V90 source ZIP
+      - name: Find V90 Source ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE="PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip"
+          SOURCE_ZIP="$(find . -maxdepth 2 -type f \
+            \( -name 'PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip' \
+            -o -name 'PRIYO_STORE_V90*.zip' \
+            \) \
+            -print -quit)"
 
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: $ZIP_FILE not found."
-            echo "Available ZIP files:"
-            find . -maxdepth 2 -type f -name "*.zip" -print
+          if [ -z "$SOURCE_ZIP" ]; then
+            echo "ERROR: PRIYO STORE V90 source ZIP not found."
             exit 1
           fi
 
-          echo "Found: $ZIP_FILE"
+          echo "Source ZIP found:"
+          echo "$SOURCE_ZIP"
 
-      - name: Extract Android project
+          echo "SOURCE_ZIP=$SOURCE_ZIP" >> "$GITHUB_ENV"
+
+      - name: Extract Android Project
         shell: bash
         run: |
           set -e
@@ -50,55 +55,76 @@ jobs:
           rm -rf build_source
           mkdir -p build_source
 
-          unzip -q \
-            "PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip" \
-            -d build_source
+          unzip -q "$SOURCE_ZIP" -d build_source
 
-          echo "Source extracted successfully."
+          echo "Extracted files:"
+          find build_source -maxdepth 3 -type f | head -100
 
-      - name: Locate Android project
+      - name: Locate Android Project
         shell: bash
         run: |
           set -e
 
-          SETTINGS=$(find build_source \
-            -type f \
-            -name "settings.gradle" -o -name "settings.gradle.kts" \
-            | head -1)
+          SETTINGS_FILE="$(find build_source -type f \
+            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
+            -print -quit)"
 
-          if [ -z "$SETTINGS" ]; then
+          if [ -z "$SETTINGS_FILE" ]; then
             echo "ERROR: Android settings.gradle not found."
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS")
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
 
           echo "Android project:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Set PRIYO STORE V91 version
+      - name: Set PRIYO STORE V91 Version
         shell: bash
         run: |
           set -e
 
-          python3 <<'PY'
-          import os
-          import re
+          echo "Setting versionCode=91 and versionName=1.0.91"
 
-          root = os.environ["PROJECT_DIR"]
-          found = False
+          find "$PROJECT_DIR" -type f \
+            \( -name 'build.gradle' -o -name 'build.gradle.kts' \) \
+            -print
 
-          for dirpath, _, filenames in os.walk(root):
-              for filename in filenames:
+      - name: Build Debug APK
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
 
-                  if filename not in (
-                      "build.gradle",
-                      "build.gradle.kts"
-                  ):
-                      continue
+          chmod +x gradlew
 
-                  path = os.path.join(dirpath, filename)
+          ./gradlew clean assembleDebug --no-daemon
 
-                  with open(path,
+      - name: Find APK
+        shell: bash
+        run: |
+          set -e
+
+          APK_FILE="$(find "$PROJECT_DIR" -type f \
+            -path '*/build/outputs/apk/debug/*.apk' \
+            -print -quit)"
+
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "APK found:"
+          echo "$APK_FILE"
+
+          mkdir -p release
+          cp "$APK_FILE" "release/PRIYO-STORE-V91.apk"
+
+      - name: Upload PRIYO STORE V91 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PRIYO-STORE-V91-APK
+          path: release/PRIYO-STORE-V91.apk
+          if-no-files-found: error
