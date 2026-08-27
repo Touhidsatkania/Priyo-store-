@@ -1,4 +1,4 @@
-name: PRIYO STORE APK Build
+name: PRIYO STORE V91 APK Build
 
 on:
   workflow_dispatch:
@@ -8,159 +8,77 @@ on:
 
 jobs:
   build-apk:
+    name: Build PRIYO STORE V91
     runs-on: ubuntu-latest
 
     steps:
-
-      # ==================================================
-      # 1. CHECKOUT
-      # ==================================================
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-
-      # ==================================================
-      # 2. JAVA 17
-      # ==================================================
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-
-      # ==================================================
-      # 3. GRADLE 8.7
-      # ==================================================
-      - name: Setup Gradle
+      - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: "8.7"
 
-
-      # ==================================================
-      # 4. PREPARE V90 PROJECT
-      # ==================================================
-      - name: Prepare PRIYO STORE project
+      - name: Find V90 source ZIP
         shell: bash
         run: |
           set -e
 
           ZIP_FILE="PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip"
 
-          echo "=========================================="
-          echo "      PRIYO STORE V90 BUILD"
-          echo "=========================================="
-
           if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found:"
-            echo "$ZIP_FILE"
-            echo ""
+            echo "ERROR: $ZIP_FILE not found."
             echo "Available ZIP files:"
-            find . -maxdepth 3 -type f -name "*.zip" -print
+            find . -maxdepth 2 -type f -name "*.zip" -print
             exit 1
           fi
+
+          echo "Found: $ZIP_FILE"
+
+      - name: Extract Android project
+        shell: bash
+        run: |
+          set -e
 
           rm -rf build_source
           mkdir -p build_source
 
-          unzip -q "$ZIP_FILE" -d build_source
+          unzip -q \
+            "PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip" \
+            -d build_source
 
-          echo "ZIP extracted successfully."
+          echo "Source extracted successfully."
 
-
-      # ==================================================
-      # 5. FIND ANDROID PROJECT
-      # ==================================================
-      - name: Find Android Gradle project
+      - name: Locate Android project
         shell: bash
         run: |
           set -e
 
-          SETTINGS_FILE=$(find build_source \
+          SETTINGS=$(find build_source \
             -type f \
-            \( \
-              -name "settings.gradle" \
-              -o \
-              -name "settings.gradle.kts" \
-            \) \
+            -name "settings.gradle" -o -name "settings.gradle.kts" \
             | head -1)
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: settings.gradle not found."
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: Android settings.gradle not found."
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          PROJECT_DIR=$(dirname "$SETTINGS")
 
-          echo "Android project found:"
+          echo "Android project:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-
-      # ==================================================
-      # 6. ENABLE ANDROIDX
-      # ==================================================
-      - name: Configure AndroidX
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          touch gradle.properties
-
-          if grep -q "^android.useAndroidX=" gradle.properties; then
-            sed -i \
-              's/^android.useAndroidX=.*/android.useAndroidX=true/' \
-              gradle.properties
-          else
-            echo "android.useAndroidX=true" >> gradle.properties
-          fi
-
-          if grep -q "^android.enableJetifier=" gradle.properties; then
-            sed -i \
-              's/^android.enableJetifier=.*/android.enableJetifier=true/' \
-              gradle.properties
-          else
-            echo "android.enableJetifier=true" >> gradle.properties
-          fi
-
-          echo "AndroidX configured."
-
-
-      # ==================================================
-      # 7. FIX KOTLIN DUPLICATE CLASSES
-      # ==================================================
-      - name: Fix Kotlin duplicate classes
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          cat > kotlin-fix.gradle <<'EOF'
-          allprojects {
-              configurations.configureEach {
-                  exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk7"
-                  exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk8"
-
-                  resolutionStrategy {
-                      force "org.jetbrains.kotlin:kotlin-stdlib:1.8.22"
-                      force "org.jetbrains.kotlin:kotlin-stdlib-common:1.8.22"
-                  }
-              }
-          }
-          EOF
-
-          echo "Kotlin duplicate-class fix created."
-
-
-      # ==================================================
-      # 8. REMOVE DUPLICATE launcher_bg
-      # ==================================================
-      - name: Fix duplicate launcher_bg
+      - name: Set PRIYO STORE V91 version
         shell: bash
         run: |
           set -e
@@ -170,173 +88,17 @@ jobs:
           import re
 
           root = os.environ["PROJECT_DIR"]
-
-          pattern = re.compile(
-              r'<color\s+name\s*=\s*["\']launcher_bg["\']\s*>.*?</color\s*>',
-              re.DOTALL
-          )
-
-          found = []
+          found = False
 
           for dirpath, _, filenames in os.walk(root):
-
-              if os.path.basename(dirpath) != "values":
-                  continue
-
               for filename in filenames:
 
-                  if not filename.endswith(".xml"):
+                  if filename not in (
+                      "build.gradle",
+                      "build.gradle.kts"
+                  ):
                       continue
 
                   path = os.path.join(dirpath, filename)
 
-                  try:
-                      with open(path, "r", encoding="utf-8") as f:
-                          text = f.read()
-                  except Exception:
-                      continue
-
-                  if pattern.search(text):
-                      found.append(path)
-
-          print("launcher_bg definitions found:", len(found))
-
-          if len(found) <= 1:
-              print("No duplicate launcher_bg.")
-          else:
-              keep = found[0]
-
-              print("Keeping:")
-              print(keep)
-
-              for path in found[1:]:
-
-                  print("Removing duplicate:")
-                  print(path)
-
-                  with open(path, "r", encoding="utf-8") as f:
-                      text = f.read()
-
-                  text = pattern.sub("", text)
-
-                  with open(path, "w", encoding="utf-8") as f:
-                      f.write(text)
-
-          print("launcher_bg check completed.")
-          PY
-
-
-      # ==================================================
-      # 9. PREPARE GRADLE WRAPPER
-      # ==================================================
-      - name: Prepare Gradle Wrapper
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          if [ ! -f "./gradlew" ]; then
-            gradle wrapper --gradle-version 8.7
-          fi
-
-          chmod +x ./gradlew
-
-          echo "Gradle wrapper ready."
-
-
-      # ==================================================
-      # 10. CLEAN BUILD
-      # ==================================================
-      - name: Clean previous build
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          ./gradlew clean \
-            --no-daemon \
-            --stacktrace \
-            -I kotlin-fix.gradle
-
-
-      # ==================================================
-      # 11. BUILD DEBUG APK
-      # ==================================================
-      - name: Build Debug APK
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "=========================================="
-          echo "       BUILDING PRIYO STORE APK"
-          echo "=========================================="
-
-          ./gradlew assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            -I kotlin-fix.gradle
-
-          echo "=========================================="
-          echo "          BUILD SUCCESS"
-          echo "=========================================="
-
-
-      # ==================================================
-      # 12. FIND APK
-      # ==================================================
-      - name: Find APK
-        shell: bash
-        run: |
-          set -e
-
-          APK=$(find "$PROJECT_DIR" \
-            -type f \
-            -name "*.apk" \
-            | grep "/build/outputs/apk/debug/" \
-            | head -1)
-
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK not found."
-
-            find "$PROJECT_DIR" \
-              -type f \
-              -name "*.apk" \
-              -print
-
-            exit 1
-          fi
-
-          echo "APK found:"
-          echo "$APK"
-
-          cp "$APK" \
-            "$GITHUB_WORKSPACE/PRIYO-STORE-DEBUG.apk"
-
-
-      # ==================================================
-      # 13. UPLOAD APK
-      # ==================================================
-      - name: Upload PRIYO STORE APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: PRIYO-STORE-APK
-          path: PRIYO-STORE-DEBUG.apk
-          if-no-files-found: error
-
-
-      # ==================================================
-      # 14. BUILD SUMMARY
-      # ==================================================
-      - name: Build Summary
-        shell: bash
-        run: |
-          echo "=========================================="
-          echo " PRIYO STORE APK BUILD COMPLETED"
-          echo "=========================================="
-          echo "APK: PRIYO-STORE-DEBUG.apk"
-          echo "Artifact: PRIYO-STORE-APK"
-          echo "=========================================="
+                  with open(path,
