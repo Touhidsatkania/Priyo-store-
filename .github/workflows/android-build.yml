@@ -13,6 +13,7 @@ jobs:
   build:
     name: Build PRIYO STORE APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -30,46 +31,84 @@ jobs:
       - name: Install Android SDK
         run: |
           yes | sdkmanager --licenses || true
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Verify Android project
+      - name: Find and extract Android project
+        shell: bash
         run: |
-          echo "Checking Android project..."
-          pwd
-          ls -la
-          test -f gradlew
-          test -d app
-          echo "Android project detected."
+          set -e
 
-      - name: Enable AndroidX
+          mkdir -p extracted
+          FOUND=""
+
+          for ZIP in ./*.zip; do
+            [ -f "$ZIP" ] || continue
+
+            NAME=$(basename "$ZIP")
+            DIR="extracted/${NAME%.zip}"
+
+            echo "Checking: $NAME"
+            rm -rf "$DIR"
+            mkdir -p "$DIR"
+
+            unzip -q "$ZIP" -d "$DIR" || continue
+
+            GRADLEW=$(find "$DIR" -type f -name "gradlew" | head -n 1)
+
+            if [ -n "$GRADLEW" ]; then
+              PROJECT_DIR=$(dirname "$GRADLEW")
+
+              if [ -d "$PROJECT_DIR/app" ]; then
+                FOUND="$PROJECT_DIR"
+                echo "Android project found:"
+                echo "$FOUND"
+                break
+              fi
+            fi
+          done
+
+          if [ -z "$FOUND" ]; then
+            echo "::error::No Android project containing gradlew and app was found."
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$FOUND" >> "$GITHUB_ENV"
+
+      - name: Configure AndroidX
         run: |
-          {
-            echo "android.useAndroidX=true"
-            echo "android.enableJetifier=true"
-          } >> gradle.properties
+          cd "$PROJECT_DIR"
+
+          touch gradle.properties
+
+          grep -q "^android.useAndroidX=" gradle.properties || \
+            echo "android.useAndroidX=true" >> gradle.properties
+
+          grep -q "^android.enableJetifier=" gradle.properties || \
+            echo "android.enableJetifier=true" >> gradle.properties
 
       - name: Make Gradle executable
         run: |
-          chmod +x gradlew
+          chmod +x "$PROJECT_DIR/gradlew"
 
-      - name: Clean project
+      - name: Show Android project
         run: |
-          ./gradlew clean --no-daemon
+          echo "Project: $PROJECT_DIR"
+          echo "Gradle:"
+          "$PROJECT_DIR/gradlew" --version
 
       - name: Build Debug APK
         run: |
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          cd "$PROJECT_DIR"
+          ./gradlew clean assembleDebug --no-daemon --stacktrace
 
       - name: Find APK
         run: |
-          find app/build/outputs/apk -type f -name "*.apk" -print
+          find "$PROJECT_DIR/app/build/outputs/apk" \
+            -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: PRIYO-STORE-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: "**/app/build/outputs/apk/debug/*.apk"
           if-no-files-found: error
