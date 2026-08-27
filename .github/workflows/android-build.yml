@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -26,27 +27,27 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Find V90 Source ZIP
+      - name: Find V91 Source ZIP
         shell: bash
         run: |
           set -e
 
-          SOURCE_ZIP="$(find . -type f \
-            \( \
-              -name 'PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip' \
-              -o -name 'PRIYO_STORE_V90*.zip' \
-            \) \
+          SOURCE_ZIP="$(find . -maxdepth 2 -type f \
+            -name 'PRIYO_STORE_V91_LOGIN_OTP_DISABLED.zip' \
             -print -quit)"
 
           if [ -z "$SOURCE_ZIP" ]; then
-            echo "ERROR: PRIYO STORE V90 source ZIP not found."
+            echo "ERROR: PRIYO_STORE_V91_LOGIN_OTP_DISABLED.zip not found."
+            echo "V90 fallback is not allowed."
             exit 1
           fi
 
-          echo "Source ZIP: $SOURCE_ZIP"
+          echo "V91 Source ZIP found:"
+          echo "$SOURCE_ZIP"
+
           echo "SOURCE_ZIP=$SOURCE_ZIP" >> "$GITHUB_ENV"
 
-      - name: Extract V90 Android Project
+      - name: Extract V91 Android Project
         shell: bash
         run: |
           set -e
@@ -66,8 +67,7 @@ jobs:
             -print -quit)"
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: settings.gradle/settings.gradle.kts not found."
-            find build_source -maxdepth 5 -type f | sort
+            echo "ERROR: Android settings file not found."
             exit 1
           fi
 
@@ -78,127 +78,72 @@ jobs:
           echo "Android project:"
           echo "$PROJECT_DIR"
 
-      - name: Enable AndroidX and Jetifier
+      - name: Remove Duplicate Launcher Color
         shell: bash
         run: |
           set -e
 
-          PROPERTIES_FILE="$PROJECT_DIR/gradle.properties"
+          DUPLICATE_FILE="$PROJECT_DIR/app/src/main/res/values/ic_launcher_colors.xml"
 
-          touch "$PROPERTIES_FILE"
-
-          if ! grep -q '^android.useAndroidX=' "$PROPERTIES_FILE"; then
-            echo 'android.useAndroidX=true' >> "$PROPERTIES_FILE"
-          else
-            sed -i 's/^android.useAndroidX=.*/android.useAndroidX=true/' "$PROPERTIES_FILE"
+          if [ -f "$DUPLICATE_FILE" ]; then
+            echo "Removing duplicate launcher color file:"
+            echo "$DUPLICATE_FILE"
+            rm -f "$DUPLICATE_FILE"
           fi
 
-          if ! grep -q '^android.enableJetifier=' "$PROPERTIES_FILE"; then
-            echo 'android.enableJetifier=true' >> "$PROPERTIES_FILE"
-          else
-            sed -i 's/^android.enableJetifier=.*/android.enableJetifier=true/' "$PROPERTIES_FILE"
+          if [ -f "$DUPLICATE_FILE" ]; then
+            echo "ERROR: Duplicate launcher color file still exists."
+            exit 1
           fi
 
-          if ! grep -q '^org.gradle.jvmargs=' "$PROPERTIES_FILE"; then
-            echo 'org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' >> "$PROPERTIES_FILE"
-          fi
+          echo "OK: Duplicate launcher color file removed."
 
-      - name: Remove Duplicate Color Resources
+      - name: Verify launcher_bg
         shell: bash
         run: |
           set -e
 
-          python3 - "$PROJECT_DIR" <<'PY'
-          import os
-          import re
-          import sys
+          COLORS_FILE="$PROJECT_DIR/app/src/main/res/values/colors.xml"
 
-          project_dir = sys.argv[1]
+          if [ ! -f "$COLORS_FILE" ]; then
+            echo "ERROR: colors.xml not found."
+            exit 1
+          fi
 
-          color_pattern = re.compile(
-              r'<color\b[^>]*\bname\s*=\s*["\']([^"\']+)["\'][^>]*>.*?</color>',
-              re.DOTALL
-          )
+          COUNT="$(grep -o 'name="launcher_bg"' "$COLORS_FILE" | wc -l)"
 
-          changed = 0
+          echo "launcher_bg count: $COUNT"
 
-          for root, _, files in os.walk(project_dir):
-              if not os.path.basename(root).startswith("values"):
-                  continue
+          if [ "$COUNT" -ne 1 ]; then
+            echo "ERROR: launcher_bg must exist exactly once."
+            exit 1
+          fi
 
-              for filename in files:
-                  if not filename.endswith(".xml"):
-                      continue
+          echo "OK: launcher_bg verified."
 
-                  path = os.path.join(root, filename)
-
-                  try:
-                      with open(path, "r", encoding="utf-8") as f:
-                          text = f.read()
-                  except UnicodeDecodeError:
-                      continue
-
-                  matches = list(color_pattern.finditer(text))
-
-                  if not matches:
-                      continue
-
-                  seen = set()
-                  removed = 0
-                  output = []
-                  last = 0
-
-                  for match in matches:
-                      output.append(text[last:match.start()])
-
-                      name = match.group(1)
-
-                      if name in seen:
-                          removed += 1
-                      else:
-                          seen.add(name)
-                          output.append(match.group(0))
-
-                      last = match.end()
-
-                  output.append(text[last:])
-                  new_text = "".join(output)
-
-                  if removed:
-                      with open(path, "w", encoding="utf-8") as f:
-                          f.write(new_text)
-
-                      changed += 1
-                      print(
-                          f"Removed {removed} duplicate color resource(s): {path}"
-                      )
-
-          print(
-              f"Duplicate color cleanup complete. Files changed: {changed}"
-          )
-          PY
-
-      - name: Verify Launcher Colors
+      - name: Verify V91 Version
         shell: bash
         run: |
           set -e
 
-          echo "Checking launcher color resources..."
+          APP_GRADLE="$PROJECT_DIR/app/build.gradle"
 
-          find "$PROJECT_DIR" -type f \
-            -path '*/src/main/res/values*/launcher_colors.xml' \
-            -print
+          if [ ! -f "$APP_GRADLE" ]; then
+            echo "ERROR: app/build.gradle not found."
+            exit 1
+          fi
 
-          while IFS= read -r FILE; do
-            echo "---- $FILE"
-            grep -nE \
-              'name="(launcher_bg|launcher_fg|launcher_text)"' \
-              "$FILE" || true
-          done < <(
-            find "$PROJECT_DIR" -type f \
-              -path '*/src/main/res/values*/launcher_colors.xml' \
-              -print
-          )
+          if ! grep -qE 'versionCode[[:space:]]+91' "$APP_GRADLE"; then
+            echo "ERROR: versionCode 91 not found."
+            exit 1
+          fi
+
+          if ! grep -qE 'versionName[[:space:]]+["'\'']1\.0\.91["'\'']' "$APP_GRADLE"; then
+            echo "ERROR: versionName 1.0.91 not found."
+            exit 1
+          fi
+
+          echo "OK: V91 version verified."
 
       - name: Clean Android Build
         shell: bash
@@ -212,15 +157,12 @@ jobs:
 
           gradle clean --no-daemon
 
-      - name: Build PRIYO STORE V91 Debug APK
+      - name: Build PRIYO STORE V91 APK
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
-
-          echo "Gradle version:"
-          gradle --version
 
           echo "Building PRIYO STORE V91..."
 
@@ -236,10 +178,7 @@ jobs:
             -print -quit)"
 
           if [ -z "$APK_FILE" ]; then
-            echo "ERROR: APK was not generated."
-            find "$PROJECT_DIR" -type f \
-              -path '*/build/outputs/**/*.apk' \
-              -print || true
+            echo "ERROR: V91 APK was not generated."
             exit 1
           fi
 
@@ -247,7 +186,7 @@ jobs:
 
           cp "$APK_FILE" "release/PRIYO-STORE-V91.apk"
 
-          echo "APK ready:"
+          echo "V91 APK created successfully:"
           ls -lh "release/PRIYO-STORE-V91.apk"
 
       - name: Upload PRIYO STORE V91 APK
