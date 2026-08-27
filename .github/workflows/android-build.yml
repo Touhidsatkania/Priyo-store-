@@ -32,13 +32,12 @@ jobs:
         run: |
           set -e
 
-          SOURCE_ZIP="$(find . -maxdepth 2 -type f \
-            -name 'PRIYO_STORE_V91_BUILD_READY_FIXED.zip' \
+          SOURCE_ZIP="$(find . -maxdepth 3 -type f \
+            -name 'PRIYO_STORE_V91_FINAL_2.zip' \
             -print -quit)"
 
           if [ -z "$SOURCE_ZIP" ]; then
-            echo "ERROR: PRIYO_STORE_V91_BUILD_READY_FIXED.zip not found."
-            echo "V90 fallback is not allowed."
+            echo "ERROR: PRIYO_STORE_V91_FINAL_2.zip not found."
             exit 1
           fi
 
@@ -78,6 +77,52 @@ jobs:
           echo "Android project:"
           echo "$PROJECT_DIR"
 
+      - name: Verify V91 Version
+        shell: bash
+        run: |
+          set -e
+
+          APP_GRADLE="$PROJECT_DIR/app/build.gradle"
+          APP_GRADLE_KTS="$PROJECT_DIR/app/build.gradle.kts"
+
+          if [ -f "$APP_GRADLE" ]; then
+
+            VERSION_CODE="$(grep -E '^[[:space:]]*versionCode[[:space:]]+[0-9]+' \
+              "$APP_GRADLE" | head -1 | grep -oE '[0-9]+$' || true)"
+
+            VERSION_NAME="$(grep -E '^[[:space:]]*versionName[[:space:]]+"' \
+              "$APP_GRADLE" | head -1 | \
+              sed -E 's/.*versionName[[:space:]]+"([^"]+)".*/\1/' || true)"
+
+          elif [ -f "$APP_GRADLE_KTS" ]; then
+
+            VERSION_CODE="$(grep -E '^[[:space:]]*versionCode[[:space:]]*=' \
+              "$APP_GRADLE_KTS" | head -1 | grep -oE '[0-9]+$' || true)"
+
+            VERSION_NAME="$(grep -E '^[[:space:]]*versionName[[:space:]]*=' \
+              "$APP_GRADLE_KTS" | head -1 | \
+              sed -E 's/.*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/' || true)"
+
+          else
+            echo "ERROR: app/build.gradle or app/build.gradle.kts not found."
+            exit 1
+          fi
+
+          echo "Detected versionCode: $VERSION_CODE"
+          echo "Detected versionName: $VERSION_NAME"
+
+          if [ "$VERSION_CODE" != "91" ]; then
+            echo "ERROR: versionCode is not 91."
+            exit 1
+          fi
+
+          if [ "$VERSION_NAME" != "1.0.91" ]; then
+            echo "ERROR: versionName is not 1.0.91."
+            exit 1
+          fi
+
+          echo "OK: PRIYO STORE V91 verified."
+
       - name: Remove Duplicate Launcher Colors
         shell: bash
         run: |
@@ -86,18 +131,16 @@ jobs:
           DUPLICATE_FILE="$PROJECT_DIR/app/src/main/res/values/ic_launcher_colors.xml"
 
           if [ -f "$DUPLICATE_FILE" ]; then
-            echo "Duplicate launcher color file found:"
-            echo "$DUPLICATE_FILE"
-
+            echo "Removing duplicate launcher color resource..."
             rm -f "$DUPLICATE_FILE"
           fi
 
           if [ -f "$DUPLICATE_FILE" ]; then
-            echo "ERROR: ic_launcher_colors.xml still exists."
+            echo "ERROR: duplicate launcher color file still exists."
             exit 1
           fi
 
-          echo "OK: duplicate launcher color file removed."
+          echo "OK: duplicate launcher color check passed."
 
       - name: Verify launcher_bg
         shell: bash
@@ -122,23 +165,27 @@ jobs:
 
           echo "OK: launcher_bg verified."
 
-      - name: Show Project Version
+      - name: Create Kotlin Dependency Fix
         shell: bash
         run: |
           set -e
 
-          echo "Checking Android project version..."
+          cat > "$GITHUB_WORKSPACE/kotlin-fix.init.gradle" <<'EOF'
+          allprojects {
+              configurations.configureEach {
+                  exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk7"
+                  exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk8"
 
-          find "$PROJECT_DIR" -maxdepth 3 -type f \
-            \( -name 'build.gradle' -o -name 'build.gradle.kts' \) \
-            -print
+                  resolutionStrategy.force(
+                      "org.jetbrains.kotlin:kotlin-stdlib:1.8.22"
+                  )
+              }
+          }
+          EOF
 
-          echo "Version references:"
-          grep -RIn \
-            --include='build.gradle' \
-            --include='build.gradle.kts' \
-            -E 'versionCode|versionName' \
-            "$PROJECT_DIR" || true
+          echo "Kotlin dependency fix created."
+
+          cat "$GITHUB_WORKSPACE/kotlin-fix.init.gradle"
 
       - name: Clean Android Build
         shell: bash
@@ -150,7 +197,9 @@ jobs:
           rm -rf .gradle
           rm -rf app/build
 
-          gradle clean --no-daemon
+          gradle clean \
+            --no-daemon \
+            --init-script "$GITHUB_WORKSPACE/kotlin-fix.init.gradle"
 
       - name: Build PRIYO STORE V91 APK
         shell: bash
@@ -164,9 +213,12 @@ jobs:
 
           echo "Building PRIYO STORE V91..."
 
-          gradle assembleDebug --no-daemon --stacktrace
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --init-script "$GITHUB_WORKSPACE/kotlin-fix.init.gradle"
 
-      - name: Find V91 APK
+      - name: Verify Generated APK
         shell: bash
         run: |
           set -e
@@ -178,7 +230,8 @@ jobs:
           if [ -z "$APK_FILE" ]; then
             echo "ERROR: V91 APK was not generated."
 
-            find "$PROJECT_DIR" -type f \
+            find "$PROJECT_DIR" \
+              -type f \
               -name '*.apk' \
               -print || true
 
@@ -189,7 +242,7 @@ jobs:
 
           cp "$APK_FILE" "release/PRIYO-STORE-V91.apk"
 
-          echo "V91 APK successfully created:"
+          echo "V91 APK created successfully:"
           ls -lh "release/PRIYO-STORE-V91.apk"
 
       - name: Upload PRIYO STORE V91 APK
