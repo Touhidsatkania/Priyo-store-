@@ -17,7 +17,7 @@ jobs:
   build:
     name: Build PRIYO STORE APK
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
 
@@ -29,6 +29,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.7'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -50,19 +55,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          ZIP="$(find . -maxdepth 1 -type f \
-            -name 'PRIYO_STORE_V*.zip' \
-            -printf '%f\n' \
-            | sort -V \
-            | tail -n 1)"
+          ZIP="$(
+            find . \
+              -maxdepth 1 \
+              -type f \
+              -name 'PRIYO_STORE_V*.zip' \
+              -printf '%T@ %p\n' \
+            | sort -nr \
+            | head -n 1 \
+            | cut -d' ' -f2-
+          )"
 
           if [ -z "$ZIP" ]; then
-            echo "::error::No PRIYO STORE ZIP found."
+            echo "::error::No PRIYO STORE ZIP found in repository root."
             exit 1
           fi
 
           echo "================================"
-          echo "Selected ZIP: $ZIP"
+          echo "Selected PRIYO STORE ZIP:"
+          echo "$ZIP"
           echo "================================"
 
           echo "PROJECT_ZIP=$ZIP" >> "$GITHUB_ENV"
@@ -78,64 +89,63 @@ jobs:
           unzip -q "$PROJECT_ZIP" -d extracted
 
           echo "ZIP CONTENT:"
-          find extracted -maxdepth 4 -type f | sort | head -n 200
+          find extracted -maxdepth 5 -type f | sort | head -n 300
 
-          echo "--------------------------------"
-
-          GRADLEW="$(find extracted \
-            -type f \
-            -name 'gradlew' \
-            -print -quit)"
-
-          if [ -z "$GRADLEW" ]; then
-            echo "::error::gradlew was not found inside the selected ZIP."
-            echo ""
-            echo "Searching for Gradle project files..."
-
-            find extracted \
-              -type f \
-              \( -name 'settings.gradle' \
-              -o -name 'settings.gradle.kts' \
-              -o -name 'build.gradle' \
-              -o -name 'build.gradle.kts' \
-              \) \
-              -print
-
-            exit 1
-          fi
-
-          PROJECT_DIR="$(dirname "$GRADLEW")"
-
-          echo "Gradle wrapper:"
-          echo "$GRADLEW"
-
-          echo "Android project:"
-          echo "$PROJECT_DIR"
-
-          if [ ! -f "$PROJECT_DIR/settings.gradle" ] &&
-             [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "::error::Gradle settings file not found."
-            exit 1
-          fi
-
-          if [ ! -d "$PROJECT_DIR/app" ]; then
-            echo "::error::Android app module not found."
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Prepare Gradle Wrapper
+      - name: Detect Android project
         shell: bash
         run: |
           set -euo pipefail
 
-          cd "$PROJECT_DIR"
+          PROJECT_DIR=""
 
-          chmod +x ./gradlew
+          while IFS= read -r SETTINGS_FILE; do
+            CANDIDATE="$(dirname "$SETTINGS_FILE")"
 
-          echo "Gradle Wrapper:"
-          ./gradlew --version
+            if [ -d "$CANDIDATE/app" ]; then
+              PROJECT_DIR="$CANDIDATE"
+              break
+            fi
+          done < <(
+            find extracted \
+              -type f \
+              \( \
+                -name 'settings.gradle' \
+                -o \
+                -name 'settings.gradle.kts' \
+              \) \
+              -print
+          )
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "::error::Android project root was not found."
+            echo ""
+            echo "Available Gradle files:"
+            find extracted \
+              -type f \
+              \( \
+                -name 'settings.gradle' \
+                -o \
+                -name 'settings.gradle.kts' \
+                -o \
+                -name 'build.gradle' \
+                -o \
+                -name 'build.gradle.kts' \
+              \) \
+              -print
+            exit 1
+          fi
+
+          if [ ! -d "$PROJECT_DIR/app" ]; then
+            echo "::error::Android app module was not found."
+            exit 1
+          fi
+
+          echo "================================"
+          echo "ANDROID PROJECT FOUND"
+          echo "================================"
+          echo "PROJECT_DIR=$PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Configure AndroidX
         shell: bash
@@ -162,22 +172,24 @@ jobs:
           cd "$PROJECT_DIR"
 
           echo "================================"
-          echo "ANDROID PROJECT"
+          echo "ANDROID PROJECT VERIFICATION"
           echo "================================"
 
-          echo "Project: $PROJECT_DIR"
+          echo ""
+          echo "Project directory:"
+          pwd
 
           echo ""
-          echo "Settings:"
-          ls -la settings.gradle* 2>/dev/null || true
+          echo "Project files:"
+          ls -la
 
           echo ""
           echo "App module:"
-          ls -la app 2>/dev/null || true
+          ls -la app
 
           echo ""
-          echo "Gradle:"
-          ./gradlew --version
+          echo "Gradle version:"
+          gradle --version
 
       - name: Build PRIYO STORE APK
         shell: bash
@@ -186,7 +198,11 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          ./gradlew clean assembleDebug \
+          echo "================================"
+          echo "BUILDING PRIYO STORE APK"
+          echo "================================"
+
+          gradle clean assembleDebug \
             --no-daemon \
             --stacktrace
 
@@ -195,13 +211,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK="$(find "$PROJECT_DIR/app/build/outputs/apk" \
-            -type f \
-            -name '*.apk' \
-            -print -quit)"
+          APK="$(
+            find "$PROJECT_DIR/app/build/outputs/apk" \
+              -type f \
+              -name '*.apk' \
+              -print \
+            | head -n 1
+          )"
 
           if [ -z "$APK" ]; then
             echo "::error::APK was not created."
+            echo ""
+            echo "Searching build outputs:"
+            find "$PROJECT_DIR/app/build" \
+              -type f \
+              -name '*.apk' \
+              -print || true
             exit 1
           fi
 
@@ -209,9 +234,9 @@ jobs:
           echo "APK CREATED SUCCESSFULLY"
           echo "================================"
 
-          echo "APK: $APK"
-
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+
+          ls -lh "$APK"
 
       - name: Upload PRIYO STORE APK
         uses: actions/upload-artifact@v4
