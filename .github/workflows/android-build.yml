@@ -31,9 +31,10 @@ jobs:
         run: |
           set -e
 
-          SOURCE_ZIP="$(find . -maxdepth 2 -type f \
+          SOURCE_ZIP="$(find . -type f \
             \( -name 'PRIYO_STORE_V90_LOGIN_SESSION_FIXED.zip' \
-            -o -name 'PRIYO_STORE_V90*.zip' \) \
+            -o -name 'PRIYO_STORE_V90*.zip' \
+            -o -name '*V90*.zip' \) \
             -print -quit)"
 
           if [ -z "$SOURCE_ZIP" ]; then
@@ -41,9 +42,12 @@ jobs:
             exit 1
           fi
 
+          echo "Found source:"
+          echo "$SOURCE_ZIP"
+
           echo "SOURCE_ZIP=$SOURCE_ZIP" >> "$GITHUB_ENV"
 
-      - name: Extract Android Project
+      - name: Extract V90 Android Project
         shell: bash
         run: |
           set -e
@@ -52,6 +56,8 @@ jobs:
           mkdir -p build_source
 
           unzip -q "$SOURCE_ZIP" -d build_source
+
+          echo "Source extracted successfully."
 
       - name: Locate Android Project
         shell: bash
@@ -63,40 +69,92 @@ jobs:
             -print -quit)"
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: settings.gradle not found."
+            echo "ERROR: Android settings.gradle not found."
+            find build_source -maxdepth 4 -type f | sort
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
 
+          echo "Android project:"
+          echo "$PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Android project found:"
-          echo "$PROJECT_DIR"
+      - name: Enable AndroidX and Jetifier
+        shell: bash
+        run: |
+          set -e
+
+          touch "$PROJECT_DIR/gradle.properties"
+
+          if ! grep -q '^android.useAndroidX=' "$PROJECT_DIR/gradle.properties"; then
+            echo "android.useAndroidX=true" >> "$PROJECT_DIR/gradle.properties"
+          else
+            sed -i 's/^android.useAndroidX=.*/android.useAndroidX=true/' \
+              "$PROJECT_DIR/gradle.properties"
+          fi
+
+          if ! grep -q '^android.enableJetifier=' "$PROJECT_DIR/gradle.properties"; then
+            echo "android.enableJetifier=true" >> "$PROJECT_DIR/gradle.properties"
+          else
+            sed -i 's/^android.enableJetifier=.*/android.enableJetifier=true/' \
+              "$PROJECT_DIR/gradle.properties"
+          fi
+
+          echo "AndroidX configuration:"
+          cat "$PROJECT_DIR/gradle.properties"
+
+      - name: Set PRIYO STORE V91 Version
+        shell: bash
+        run: |
+          set -e
+
+          echo "Searching Android Gradle files..."
+
+          find "$PROJECT_DIR" -type f \
+            \( -name 'build.gradle' -o -name 'build.gradle.kts' \) \
+            -print
+
+          while IFS= read -r FILE; do
+            echo "Checking: $FILE"
+
+            sed -i -E \
+              's/versionCode[[:space:]]+[0-9]+/versionCode 91/g' \
+              "$FILE" || true
+
+            sed -i -E \
+              's/versionName[[:space:]]+["'\''][^"'\'']+["'\'']/versionName "1.0.91"/g' \
+              "$FILE" || true
+
+          done < <(find "$PROJECT_DIR" -type f \
+            \( -name 'build.gradle' -o -name 'build.gradle.kts' \))
+
+          echo "V91 version configuration completed."
 
       - name: Inspect Android Project
         shell: bash
         run: |
           set -e
 
-          echo "Project files:"
-          find "$PROJECT_DIR" -maxdepth 2 -type f | sort
+          echo "Project structure:"
+          find "$PROJECT_DIR" -maxdepth 3 -type f | sort
 
-      - name: Build Debug APK
+      - name: Build PRIYO STORE V91 Debug APK
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          echo "Using Gradle 8.7"
+          echo "Gradle version:"
           gradle --version
 
-          echo "Starting Android build..."
+          echo "Starting PRIYO STORE V91 build..."
 
-          gradle clean assembleDebug --no-daemon
+          gradle clean assembleDebug --no-daemon --stacktrace
 
-      - name: Find APK
+      - name: Find V91 APK
         shell: bash
         run: |
           set -e
@@ -106,15 +164,19 @@ jobs:
             -print -quit)"
 
           if [ -z "$APK_FILE" ]; then
-            echo "ERROR: APK was not generated."
+            echo "ERROR: V91 APK was not generated."
             exit 1
           fi
 
-          echo "APK found:"
+          echo "V91 APK found:"
           echo "$APK_FILE"
 
           mkdir -p release
-          cp "$APK_FILE" "release/PRIYO-STORE-V91.apk"
+
+          cp "$APK_FILE" \
+            "release/PRIYO-STORE-V91.apk"
+
+          ls -lh release/PRIYO-STORE-V91.apk
 
       - name: Upload PRIYO STORE V91 APK
         uses: actions/upload-artifact@v4
